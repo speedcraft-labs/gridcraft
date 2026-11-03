@@ -1,7 +1,8 @@
 //! Conditional formatting evaluation: what extra style, data bar, colour scale or icon a cell
 //! gets.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
 use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
@@ -20,10 +21,152 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
-/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
+/// Conditional-format preparations for one immutable paint or lookup batch.
+/// Create a new cache after changing the workbook, its rules, or their ranges.
 #[derive(Default)]
 pub struct CfCache {
-    stats: HashMap<usize, RuleStats>,
+    stats: HashMap<(usize, usize), RuleStats>,
+    indices: HashMap<usize, SheetIndex>,
+    formulas: RefCell<FormulaCache>,
+    #[cfg(test)]
+    legacy: bool,
+}
+
+#[derive(Default)]
+struct FormulaCache {
+    entries: HashMap<String, Option<gridcraft_formula::Expr>>,
+    recent: VecDeque<String>,
+    #[cfg(test)]
+    legacy: bool,
+}
+
+impl FormulaCache {
+    fn evaluate(&mut self, wb: &Workbook, sheet: usize, at: CellRef, first: CellRef, formula: &str) -> Value {
+        #[cfg(test)]
+        if self.legacy {
+            return gridcraft_calc::evaluate(wb, sheet, at, &relative(formula, first, at));
+        }
+        let body = formula.strip_prefix('=').unwrap_or(formula);
+        if !self.entries.contains_key(body) {
+            if self.entries.len() >= 512
+                && let Some(oldest) = self.recent.pop_front()
+            {
+                self.entries.remove(&oldest);
+            }
+            self.entries.insert(body.to_owned(), gridcraft_formula::parse(body).ok());
+        }
+        self.recent.retain(|key| key != body);
+        self.recent.push_back(body.to_owned());
+        match self.entries.get(body).and_then(Option::as_ref) {
+            Some(expr) => {
+                let shifted =
+                    gridcraft_formula::adjust::shift_relative(expr.clone(), at.row as i64 - first.row as i64, at.col as i64 - first.col as i64);
+                gridcraft_calc::recalc::evaluate_expr(wb, sheet, at, &shifted)
+            }
+            None => Value::Error(gridcraft_core::CellError::Name),
+        }
+    }
+}
+
+#[derive(Default)]
+struct SheetIndex {
+    columns: HashMap<u32, RangeIndex>,
+}
+
+impl SheetIndex {
+    fn new(rules: &[CondFormat]) -> Self {
+        let mut columns: HashMap<u32, Vec<(RangeRef, usize)>> = HashMap::new();
+        for (id, rule) in rules.iter().enumerate() {
+            for range in &rule.ranges {
+                Self::insert(&mut columns, *range, id, 1, 0, gridcraft_core::MAX_COLS - 1);
+            }
+        }
+        Self { columns: columns.into_iter().map(|(node, items)| (node, RangeIndex::new(items))).collect() }
+    }
+
+    fn insert(columns: &mut HashMap<u32, Vec<(RangeRef, usize)>>, range: RangeRef, id: usize, node: u32, start: u32, end: u32) {
+        if range.end.col < start || range.start.col > end {
+            return;
+        }
+        if range.start.col <= start && end <= range.end.col {
+            columns.entry(node).or_default().push((range, id));
+            return;
+        }
+        if start == end {
+            return;
+        }
+        let middle = start + (end - start) / 2;
+        Self::insert(columns, range, id, node * 2, start, middle);
+        Self::insert(columns, range, id, node * 2 + 1, middle + 1, end);
+    }
+
+    fn query(&self, cell: CellRef, result: &mut Vec<usize>) {
+        if cell.col >= gridcraft_core::MAX_COLS {
+            return;
+        }
+        let (mut node, mut start, mut end) = (1, 0, gridcraft_core::MAX_COLS - 1);
+        loop {
+            if let Some(index) = self.columns.get(&node) {
+                index.query(cell, 1, 0, index.items.len(), result);
+            }
+            if start == end {
+                break;
+            }
+            let middle = start + (end - start) / 2;
+            if cell.col <= middle {
+                node *= 2;
+                end = middle;
+            } else {
+                node = node * 2 + 1;
+                start = middle + 1;
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct RangeIndex {
+    items: Vec<(RangeRef, usize)>,
+    max_end: Vec<u32>,
+}
+
+impl RangeIndex {
+    fn new(items: Vec<(RangeRef, usize)>) -> Self {
+        let mut index = Self { items, ..Self::default() };
+        index.items.sort_by_key(|(range, _)| range.start.row);
+        index.max_end.resize(index.items.len().saturating_mul(4).saturating_add(1), 0);
+        index.build(1, 0, index.items.len());
+        index
+    }
+
+    fn build(&mut self, node: usize, start: usize, end: usize) -> u32 {
+        if start == end {
+            return 0;
+        }
+        let max = if end - start == 1 {
+            self.items[start].0.end.row
+        } else {
+            let middle = start + (end - start) / 2;
+            self.build(node * 2, start, middle).max(self.build(node * 2 + 1, middle, end))
+        };
+        self.max_end[node] = max;
+        max
+    }
+
+    fn query(&self, cell: CellRef, node: usize, start: usize, end: usize, result: &mut Vec<usize>) {
+        if start == end || self.max_end[node] < cell.row || self.items[start].0.start.row > cell.row {
+            return;
+        }
+        if end - start == 1 {
+            if self.items[start].0.contains(cell) {
+                result.push(self.items[start].1);
+            }
+        } else {
+            let middle = start + (end - start) / 2;
+            self.query(cell, node * 2, start, middle, result);
+            self.query(cell, node * 2 + 1, middle, end, result);
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -112,7 +255,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     a + (b - a) * (rank - lo as f64)
 }
 
-fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfValueKind) -> f64 {
+fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfValueKind, formulas: &RefCell<FormulaCache>) -> f64 {
     let min = st.sorted.first().copied().unwrap_or(0.0);
     let max = st.sorted.last().copied().unwrap_or(0.0);
     match k {
@@ -121,7 +264,7 @@ fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfVal
         CfValueKind::Number(n) => *n,
         CfValueKind::Percent(p) => min + (max - min) * p / 100.0,
         CfValueKind::Percentile(p) => percentile(&st.sorted, *p),
-        CfValueKind::Formula(f) => gridcraft_calc::evaluate(wb, sheet, at, f).to_number().unwrap_or(0.0),
+        CfValueKind::Formula(f) => formulas.borrow_mut().evaluate(wb, sheet, at, at, f).to_number().unwrap_or(0.0),
     }
 }
 
@@ -144,13 +287,14 @@ struct RuleEval<'a> {
     value: &'a Value,
     text: &'a str,
     stats: &'a RuleStats,
+    formulas: &'a RefCell<FormulaCache>,
 }
 
 fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Style> {
-    let RuleEval { wb, sheet, cell, first, value, text, stats } = ctx;
+    let RuleEval { wb, sheet, cell, first, value, text, stats, formulas } = ctx;
     match rule {
         CfRule::CellIs { op, a, b, style } => {
-            let eval = |f: &str| gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(f, *first, *cell));
+            let eval = |f: &str| formulas.borrow_mut().evaluate(wb, *sheet, *cell, *first, f);
             let av = eval(a);
             let matches = match op {
                 CfOperator::Between | CfOperator::NotBetween => {
@@ -169,7 +313,7 @@ fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Sty
             (matches && !value.is_error()).then_some(style.as_ref())
         }
         CfRule::Expression { formula, style } => {
-            gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(formula, *first, *cell)).to_bool().unwrap_or(false).then_some(style.as_ref())
+            formulas.borrow_mut().evaluate(wb, *sheet, *cell, *first, formula).to_bool().unwrap_or(false).then_some(style.as_ref())
         }
         CfRule::ContainsText { text: needle, style } => {
             (!value.is_error() && text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
@@ -230,6 +374,11 @@ impl CfCache {
         Self::default()
     }
 
+    #[cfg(test)]
+    fn old() -> Self {
+        Self { legacy: true, formulas: RefCell::new(FormulaCache { legacy: true, ..FormulaCache::default() }), ..Self::default() }
+    }
+
     /// Conditional look of `c`, or `None` when no rule applies.
     pub fn look(&mut self, wb: &Workbook, sheet: usize, c: CellRef) -> Option<CfLook> {
         let sh = wb.sheet(sheet)?;
@@ -238,19 +387,34 @@ impl CfCache {
         }
         let mut out = CfLook::default();
         let mut any = false;
-        let mut rules: Vec<(usize, &CondFormat)> =
-            sh.cond_formats.iter().enumerate().filter(|(_, cf)| cf.ranges.iter().any(|r| r.contains(c))).collect();
-        rules.sort_by_key(|(_, cf)| cf.priority);
+        let mut candidates = Vec::new();
+        #[cfg(test)]
+        if self.legacy {
+            candidates
+                .extend(sh.cond_formats.iter().enumerate().filter(|(_, rule)| rule.ranges.iter().any(|range| range.contains(c))).map(|(id, _)| id));
+        } else {
+            let index = self.indices.entry(sheet).or_insert_with(|| SheetIndex::new(&sh.cond_formats));
+            index.query(c, &mut candidates);
+        }
+        #[cfg(not(test))]
+        {
+            let index = self.indices.entry(sheet).or_insert_with(|| SheetIndex::new(&sh.cond_formats));
+            index.query(c, &mut candidates);
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates.sort_by_key(|id| sh.cond_formats[*id].priority);
+        let rules = candidates.into_iter().filter_map(|id| sh.cond_formats.get(id).map(|rule| (id, rule)));
         let v = sh.value(c);
+        let text = v.display();
         let no_stats = RuleStats::default();
         for (idx, cf) in rules {
             let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
-                Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
+                Some(need) => &*self.stats.entry((sheet, idx)).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
                 None => &no_stats,
             };
-            let text = v.display();
-            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st };
+            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st, formulas: &self.formulas };
             let matched_style = simple_rule_style(&context, &cf.rule).or_else(|| match &cf.rule {
                 CfRule::Top10 { bottom, percent, rank, style } => match v.as_f64() {
                     Some(n) if !st.sorted.is_empty() => {
@@ -281,7 +445,7 @@ impl CfCache {
                     if let Some(n) = v.as_f64() {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
-                            .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
+                            .map(|(k, col)| (threshold(wb, sheet, c, st, k, &self.formulas), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
                             .collect();
                         let rgb = match pts.as_slice() {
                             [(a, ca), (b, cb)] => lerp(*ca, *cb, if b > a { (n - a) / (b - a) } else { 0.0 }),
@@ -303,8 +467,8 @@ impl CfCache {
                 }
                 CfRule::DataBar { min, max, color, gradient, show_value } => {
                     if let Some(n) = v.as_f64() {
-                        let lo = threshold(wb, sheet, c, st, min);
-                        let hi = threshold(wb, sheet, c, st, max);
+                        let lo = threshold(wb, sheet, c, st, min, &self.formulas);
+                        let hi = threshold(wb, sheet, c, st, max, &self.formulas);
                         let lo = if lo > 0.0 { 0.0 } else { lo };
                         let frac = if hi > lo { ((n - lo) / (hi - lo)).clamp(0.0, 1.0) } else { 1.0 };
                         if out.bar.is_none() {
@@ -333,7 +497,7 @@ impl CfCache {
                                 defaults.get(1..).unwrap_or_default()
                             }
                         };
-                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
+                        let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t, &self.formulas)).collect();
                         let mut idx = cuts.iter().filter(|cut| n >= **cut).count();
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);
@@ -399,6 +563,7 @@ fn layer_under(style: &mut Style, lower: &Style) {
 }
 
 /// Shifts a rule formula written for the top-left cell of the range to `c`.
+#[cfg(test)]
 fn relative(f: &str, first: CellRef, c: CellRef) -> String {
     if first == c {
         return f.to_string();
@@ -413,9 +578,104 @@ fn relative(f: &str, first: CellRef, c: CellRef) -> String {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use serde_json::json;
 
     use super::*;
+
+    fn compare_batch(wb: &Workbook, rows: u32, cols: u32) {
+        let mut current = CfCache::new();
+        let mut old = CfCache::old();
+        for row in 0..rows {
+            for col in 0..cols {
+                let cell = CellRef::new(row, col);
+                assert_eq!(current.look(wb, 0, cell), old.look(wb, 0, cell), "{cell}");
+            }
+        }
+    }
+
+    #[test]
+    fn existing_rules_match_legacy() {
+        let mut session = crate::Session::new();
+        session.new_workbook();
+        session.execute("range.setValues", json!({"range":"A1", "values":[[1,"a"],[2,"A"],[3,"b"],[10,"c"]]})).unwrap();
+        for rule in
+            [json!({"type":"duplicate","preset":"lightRedFill"}), json!({"type":"top10","rank":1,"preset":"redBorder"}), json!({"type":"colorScale"})]
+        {
+            session.execute("home.conditionalFormat", json!({"range":"A1:B4", "rule":rule})).unwrap();
+        }
+        compare_batch(&session.doc().unwrap().wb, 6, 4);
+    }
+
+    #[test]
+    fn new_batches_follow_edits_and_row_shifts() {
+        let mut session = crate::Session::new();
+        session.new_workbook();
+        session.execute("range.setValues", json!({"range":"A1", "values":[[1],[3],[5]]})).unwrap();
+        session
+            .execute(
+                "home.conditionalFormat",
+                json!({"range":"A1:A3", "rule":{"type":"cellIs", "operator":"greater", "value":"2", "preset":"lightRedFill"}}),
+            )
+            .unwrap();
+        compare_batch(&session.doc().unwrap().wb, 6, 2);
+        session.execute("cell.set", json!({"cell":"A1", "input":"10"})).unwrap();
+        compare_batch(&session.doc().unwrap().wb, 6, 2);
+        session.execute("home.insertRows", json!({"rows":"2:2"})).unwrap();
+        compare_batch(&session.doc().unwrap().wb, 6, 2);
+        session.execute("home.deleteRows", json!({"rows":"1:1"})).unwrap();
+        compare_batch(&session.doc().unwrap().wb, 6, 2);
+        let mut wb = session.doc().unwrap().wb.as_ref().clone();
+        if let CfRule::CellIs { a, .. } = &mut wb.sheet_mut(0).unwrap().cond_formats[0].rule {
+            *a = "100".to_owned();
+        }
+        compare_batch(&wb, 6, 2);
+    }
+
+    proptest! {
+        #[test]
+        fn random_rules_match_legacy(specs in prop::collection::vec((0u32..6, 0u32..6, 0u32..4, 0u32..4, 0u32..4, any::<bool>(), 0usize..4), 0..30)) {
+            let mut session = crate::Session::new();
+            session.new_workbook();
+            session.execute("range.setValues", json!({"range":"A1", "values":[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]})).unwrap();
+            let mut wb = session.doc().unwrap().wb.as_ref().clone();
+            let sh = wb.sheet_mut(0).unwrap();
+            for (row, col, height, width, priority, stop, formula) in specs {
+                let range = RangeRef::new(CellRef::new(row, col), CellRef::new(row + height, col + width));
+                let formula = ["=A1>2", "=$A1>3", "=A$1<10", "=$A$1=1"][formula];
+                let style = Style { num_fmt: gridcraft_model::NumFmt::new(&(priority + 1).to_string()), ..Style::default() };
+                sh.cond_formats.push(CondFormat { ranges: vec![range, range], rule: CfRule::Expression { formula: formula.to_owned(), style: Box::new(style) }, priority, stop_if_true: stop });
+            }
+            compare_batch(&wb, 10, 10);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn viewport_benchmark() {
+        let mut session = crate::Session::new();
+        session.new_workbook();
+        let mut wb = session.doc().unwrap().wb.as_ref().clone();
+        let sh = wb.sheet_mut(0).unwrap();
+        for index in 0..200 {
+            let start = index * 25;
+            sh.cond_formats.push(CondFormat {
+                ranges: vec![RangeRef::new(CellRef::new(start, 0), CellRef::new(start + 24, 9))],
+                rule: CfRule::Expression { formula: "=A1>0".to_owned(), style: Box::new(Style::default()) },
+                priority: index,
+                stop_if_true: false,
+            });
+        }
+        for (label, mut cache) in [("before", CfCache::old()), ("after", CfCache::new())] {
+            let start = gridcraft_core::date::unix_now_ms().unwrap_or(0.0);
+            for row in 0..5000 {
+                for col in 0..10 {
+                    std::hint::black_box(cache.look(&wb, 0, CellRef::new(row, col)));
+                }
+            }
+            eprintln!("{label}: {:.3} ms", gridcraft_core::date::unix_now_ms().unwrap_or(start) - start);
+        }
+    }
 
     #[test]
     fn every_matching_rule_applies() {
