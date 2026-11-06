@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::cell::Cell;
@@ -49,6 +49,41 @@ impl CellStore {
             return None;
         }
         Arc::make_mut(band).rows.get_mut(&c.row)?.get_mut(&c.col)
+    }
+    /// Updates cached cell values in row-major order, making each shared band unique once.
+    /// Recalculation writes a large sorted batch; routing each value through `get_mut` repeats
+    /// the band lookup and `Arc::make_mut` check for every cell.
+    pub fn update_values_sorted(&mut self, updates: &[(CellRef, Value)]) {
+        let mut start = 0;
+        while start < updates.len() {
+            let band_index = updates[start].0.row / BAND;
+            let mut band_end = start + 1;
+            while band_end < updates.len() && updates[band_end].0.row / BAND == band_index {
+                band_end += 1;
+            }
+            if let Some(band_arc) = self.bands.get_mut(&band_index) {
+                let band = Arc::make_mut(band_arc);
+                let mut row_start = start;
+                while row_start < band_end {
+                    let row = updates[row_start].0.row;
+                    let mut row_end = row_start + 1;
+                    while row_end < band_end && updates[row_end].0.row == row {
+                        row_end += 1;
+                    }
+                    if let Some(cols) = band.rows.get_mut(&row) {
+                        for (at, value) in &updates[row_start..row_end] {
+                            if let Some(cell) = cols.get_mut(&at.col)
+                                && cell.value != *value
+                            {
+                                cell.value = value.clone();
+                            }
+                        }
+                    }
+                    row_start = row_end;
+                }
+            }
+            start = band_end;
+        }
     }
     /// Stores a cell; a default (empty, unstyled) cell is removed instead.
     pub fn set(&mut self, c: CellRef, cell: Cell) {

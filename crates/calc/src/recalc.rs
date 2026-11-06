@@ -464,14 +464,13 @@ impl Calc {
                 end += 1;
             }
             if let Some(sheet) = wb.sheet_mut(sheet_index) {
+                let mut updates = Vec::with_capacity(end - start);
                 for key in &dirty[start..end] {
-                    let Some(value) = results.remove(key) else { continue };
-                    if let Some(cell) = sheet.cells.get_mut(key.1)
-                        && cell.value != value
-                    {
-                        cell.value = value;
+                    if let Some(value) = results.remove(key) {
+                        updates.push((key.1, value));
                     }
                 }
+                sheet.cells.update_values_sorted(&updates);
             }
             start = end;
         }
