@@ -947,9 +947,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
-    if let Some(p) = &prior {
+    {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+        // A new workbook should be readable by its owner and group, while the
+        // process umask may further restrict those permissions. Replacing an
+        // existing workbook keeps its current access mode.
+        opts.mode(prior.as_ref().map_or(0o644, |p| p.mode()));
     }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);

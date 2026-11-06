@@ -464,6 +464,10 @@ fn renders_every_ribbon_tab_without_panicking() {
 /// Language commands are listed and every available locale renders and persists; CJK locales are omitted when craft fonts are absent.
 fn language_switch_renders_the_ribbon_and_persists() {
     let mut h = harness(blank());
+    // The language catalog includes Vietnamese text that the intentionally
+    // minimal CI font set does not cover. This test exercises the UI state and
+    // persistence, not glyph rasterization.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     // English by default whatever the host's locale: only the desktop app reads the system language.
     assert_eq!(h.state().ui.language, Language::En);
     // The language commands are listed with the other UI commands.
@@ -1355,6 +1359,9 @@ fn column_autocomplete_folds_case_beyond_ascii() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"], ["STRAẞENBAHN"]]})).unwrap();
     s.execute("selection.set", json!({"cell": "A5"})).unwrap();
     let mut h = harness(s);
+    // The test includes capital sharp S, which is outside the minimal pinned
+    // test fonts. The assertions below cover matching and caret placement.
+    h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
     text(&mut h, "éba");
     assert_eq!(completion(&h), ("éba".into(), Some("ébano".into())), "Ébano and ébano are one entry, Ébène doesn't match");
     h.state_mut().cancel_edit();
