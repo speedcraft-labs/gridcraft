@@ -11,7 +11,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 fn main() {
-    let path = std::env::args().nth(1).filter(|s| !s.is_empty());
+    let mut args = std::env::args().skip(1);
+    let input_name = args.next().unwrap_or_default();
+    let path = if input_name.starts_with("synthetic-") { None } else { args.next().filter(|s| !s.is_empty()) };
     let mut session = Session::new();
     if let Some(path) = path.as_deref() {
         session.execute("file.open", json!({"path": path})).expect("open real workbook");
