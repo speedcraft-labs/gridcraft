@@ -447,11 +447,36 @@ impl Calc {
         &mut self,
         wb: &mut Workbook,
         dirty: &[Key],
-        results: HashMap<Key, Value>,
+        mut results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
+        // `run` has already put dirty cells in row-major order. Applying values in that order
+        // walks CellStore's row and band maps sequentially; iterating the result hash map here
+        // would visit those same cells in random order and repeatedly miss the sparse-store
+        // working set on large recalculations.
+        let mut start = 0;
+        while start < dirty.len() {
+            let sheet_index = dirty[start].0;
+            let mut end = start + 1;
+            while end < dirty.len() && dirty[end].0 == sheet_index {
+                end += 1;
+            }
+            if let Some(sheet) = wb.sheet_mut(sheet_index) {
+                for key in &dirty[start..end] {
+                    let Some(value) = results.remove(key) else { continue };
+                    if let Some(cell) = sheet.cells.get_mut(key.1)
+                        && cell.value != value
+                    {
+                        cell.value = value;
+                    }
+                }
+            }
+            start = end;
+        }
+        // Keep the safety-net behavior for dynamically discovered formulas that the host may
+        // have evaluated outside the initial dirty list.
         for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             if let Some(cell) = sheet.cells.get_mut(key.1)
