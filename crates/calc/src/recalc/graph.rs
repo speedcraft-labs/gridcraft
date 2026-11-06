@@ -329,6 +329,14 @@ impl Graph {
         self.acyclic
     }
 
+    pub(super) fn order_rank(&self, key: &Key) -> Option<usize> {
+        self.order_rank.get(key).copied()
+    }
+
+    pub(super) fn order_len(&self) -> usize {
+        self.order.len()
+    }
+
     /// Index entries of a formula's precedents, without duplicates: single cells, column
     /// intervals and wide ranges.
     fn entries(areas: &[Area]) -> Entries {

@@ -13,7 +13,7 @@
 use std::collections::VecDeque;
 
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
-use gridcraft_formula::Expr;
+use gridcraft_formula::{BinOp, Expr, SheetSel};
 use gridcraft_model::{CalcMode, Workbook};
 
 use crate::eval::{Evaluator, Host, precedents, stack_position};
@@ -384,43 +384,52 @@ impl Calc {
             // Keep the workbook's cached dependency order across ordinary edits. Only the dirty
             // formulas are sorted/merged into it; graph mutations rebuild the order above.
             self.graph.order_dirty(&mut dirty);
-            let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
-            for k in &dirty {
-                if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
-                    exprs.insert(*k, e);
-                }
-            }
-            let python: HashMap<Key, Value> = dirty
-                .iter()
-                .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
-                .collect();
-            let now = self.now();
-            let mut rng = self.rng;
+            let fast_values = self.simple_numeric_add_batch(wb, &dirty);
             let tp = prof_now();
-            let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
-                host.iterate = wb.calc.iterative;
+            let (results, spills, cycles, evaluated_count) = if fast_values.is_some() {
+                (HashMap::default(), HashMap::default(), Vec::new(), dirty.len())
+            } else {
+                let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
                 for k in &dirty {
-                    if self.graph.is_acyclic() && self.graph.dynamic.is_empty() && !host.iterate {
-                        host.calculate_ready(*k);
-                    } else {
-                        host.calculate(*k);
+                    if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
+                        exprs.insert(*k, e);
                     }
                 }
-                if host.iterate && !host.members.is_empty() {
-                    let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
-                    if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
-                        eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
+                let python: HashMap<Key, Value> = dirty
+                    .iter()
+                    .filter_map(|k| {
+                        wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v))
+                    })
+                    .collect();
+                let now = self.now();
+                let mut rng = self.rng;
+                let (results, spills, cycles) = {
+                    let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                    host.iterate = wb.calc.iterative;
+                    for k in &dirty {
+                        if self.graph.is_acyclic() && self.graph.dynamic.is_empty() && !host.iterate {
+                            host.calculate_ready(*k);
+                        } else {
+                            host.calculate(*k);
+                        }
                     }
-                }
-                (host.results, host.spills, host.cycles)
+                    if host.iterate && !host.members.is_empty() {
+                        let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
+                        if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                            eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
+                        }
+                    }
+                    (host.results, host.spills, host.cycles)
+                };
+                self.rng = rng;
+                let evaluated_count = results.len();
+                (results, spills, cycles, evaluated_count)
             };
-            self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
-                eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
+                eprintln!("  eval {} formulas {:.1} ms", evaluated_count, prof_now() - tp);
             }
             let tw = prof_now();
-            self.last_recalc_cells += results.len();
+            self.last_recalc_cells += evaluated_count;
             // The loops this round finds replace the ones listed for the formulas it evaluated.
             if !self.circular.is_empty() {
                 let evaluated: HashSet<Key> = dirty.iter().copied().collect();
@@ -436,7 +445,12 @@ impl Calc {
                 sorted_dirty = Some(keys);
             }
             let write_order = sorted_dirty.as_deref().unwrap_or(&dirty);
-            let mut spill_changes = self.write_back(wb, write_order, results, &spills);
+            let mut spill_changes = if let Some(values) = fast_values {
+                self.write_back_numeric_adds(wb, &dirty, values);
+                Vec::new()
+            } else {
+                self.write_back(wb, write_order, results, &spills)
+            };
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
@@ -462,6 +476,84 @@ impl Calc {
             self.circular.clear();
         } else {
             self.circular.retain(|k| self.graph.nodes.contains_key(k));
+        }
+    }
+
+    /// Evaluates large, spill-free batches of simple numeric additions without constructing an
+    /// evaluator result map. Results stay as f64 values in topological order until writeback.
+    fn simple_numeric_add_batch(&self, wb: &Workbook, dirty: &[Key]) -> Option<Vec<f64>> {
+        if dirty.len() < 256
+            || wb.calc.iterative
+            || !self.graph.is_acyclic()
+            || !self.graph.dynamic.is_empty()
+            || wb.sheets.iter().any(|sheet| !sheet.spill_ranges.is_empty())
+            || dirty.windows(2).any(|pair| (pair[0].0, pair[0].1.row, pair[0].1.col) > (pair[1].0, pair[1].1.row, pair[1].1.col))
+        {
+            return None;
+        }
+
+        let mut dirty_slots = vec![usize::MAX; self.graph.order_len()];
+        for (slot, key) in dirty.iter().enumerate() {
+            let rank = self.graph.order_rank(key)?;
+            *dirty_slots.get_mut(rank)? = slot;
+        }
+
+        let mut values = vec![0.0; dirty.len()];
+        for (slot, key) in dirty.iter().enumerate() {
+            let cell = wb.sheet(key.0)?.cell(key.1)?;
+            if cell.py.is_some() {
+                return None;
+            }
+            let formula = cell.formula.as_ref()?;
+            if formula.dynamic || formula.array.is_some() {
+                return None;
+            }
+            let Expr::Binary(BinOp::Add, left, right) = formula.expr.as_deref()? else { return None };
+            let (Expr::Ref(reference), Expr::Number(addend)) = (left.as_ref(), right.as_ref()) else { return None };
+            if reference.sheet != SheetSel::Current || !reference.range().is_single() {
+                return None;
+            }
+
+            let precedent = (key.0, reference.range().start);
+            let number = if let Some(rank) = self.graph.order_rank(&precedent) {
+                let precedent_slot = *dirty_slots.get(rank)?;
+                if precedent_slot != usize::MAX {
+                    if precedent_slot >= slot {
+                        return None;
+                    }
+                    *values.get(precedent_slot)?
+                } else {
+                    match wb.sheet(precedent.0)?.value(precedent.1) {
+                        Value::Number(number) => number,
+                        _ => return None,
+                    }
+                }
+            } else {
+                match wb.sheet(precedent.0)?.value(precedent.1) {
+                    Value::Number(number) => number,
+                    _ => return None,
+                }
+            };
+            *values.get_mut(slot)? = number + *addend;
+        }
+        Some(values)
+    }
+
+    /// Stores a numeric-add batch directly from its f64 buffer. The fast path admits only
+    /// row-major dirty sets and workbooks without existing spills.
+    fn write_back_numeric_adds(&mut self, wb: &mut Workbook, dirty: &[Key], values: Vec<f64>) {
+        let mut start = 0;
+        while start < dirty.len() {
+            let sheet_index = dirty[start].0;
+            let mut end = start + 1;
+            while end < dirty.len() && dirty[end].0 == sheet_index {
+                end += 1;
+            }
+            if let Some(sheet) = wb.sheet_mut(sheet_index) {
+                let updates: Vec<_> = dirty[start..end].iter().zip(&values[start..end]).map(|(key, value)| (key.1, Value::number(*value))).collect();
+                sheet.cells.update_values_sorted_owned(updates);
+            }
+            start = end;
         }
     }
 
