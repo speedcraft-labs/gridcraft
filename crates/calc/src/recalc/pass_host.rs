@@ -1,7 +1,7 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
-use gridcraft_formula::Expr;
+use gridcraft_formula::{BinOp, Expr, SheetSel};
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -194,6 +194,12 @@ fn stored_spill_in<'s>(sheet: &'s gridcraft_model::Sheet, range: RangeRef, f: &m
 }
 
 impl PassHost<'_> {
+    /// Evaluates one formula whose dirty precedents have already been visited in topological
+    /// order. This avoids allocating the nested-work stack for every cell in a long, acyclic pass.
+    pub(super) fn calculate_ready(&mut self, k: Key) {
+        self.compute(k);
+    }
+
     /// Calculates `k` (and the formulas it reads) with bounded stack: when [`Self::compute`] would
     /// go deeper than [`MAX_NESTED`], it suspends what is in progress, the formula it needed is
     /// calculated from here, then the suspended ones again (reading the results kept so far).
@@ -252,6 +258,11 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
+        if let Some(value) = self.simple_numeric_add(k, expr) {
+            self.pending.remove(&k);
+            self.results.insert(k, value.clone());
+            return value;
+        }
         if self.suspend.is_some() {
             // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
             // calculated with the suspended one, so the evaluations are not restarted for each.
@@ -364,6 +375,24 @@ impl PassHost<'_> {
         };
         self.results.insert(k, v.clone());
         v
+    }
+
+    /// Fast path for the scalar chain/fan-out shape `=A1+1`. It is deliberately narrow: both
+    /// operands must be a same-sheet single-cell reference and a numeric literal, and the
+    /// precedent must already be available. Every other formula uses the full evaluator.
+    fn simple_numeric_add(&self, k: Key, expr: &Expr) -> Option<Value> {
+        let Expr::Binary(BinOp::Add, left, right) = expr else { return None };
+        let (Expr::Ref(reference), Expr::Number(addend)) = (left.as_ref(), right.as_ref()) else { return None };
+        if reference.sheet != SheetSel::Current || !reference.range().is_single() {
+            return None;
+        }
+        let precedent = (k.0, reference.range().start);
+        if self.pending.contains(&precedent) {
+            return None;
+        }
+        let value = self.results.get(&precedent).cloned().or_else(|| self.wb.sheet(precedent.0).map(|s| s.value(precedent.1)))?;
+        let Value::Number(number) = value else { return None };
+        Some(Value::number(number + addend))
     }
 
     /// A Python cell's kept result as its value: an array spills from the cell unless it is

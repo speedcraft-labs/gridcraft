@@ -143,6 +143,7 @@ impl Calc {
             }
         }
         self.graph.settle();
+        self.graph.rebuild_order();
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
     }
 
@@ -208,6 +209,7 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        let mut graph_changed = false;
         for &k in changed {
             let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.clone());
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
@@ -218,10 +220,12 @@ impl Calc {
                 Some(e) => {
                     let (areas, dynamic) = precedents(wb, k.0, &e);
                     self.graph.insert(k, Node { areas, dynamic });
+                    graph_changed = true;
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
                     self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    graph_changed = true;
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -234,6 +238,7 @@ impl Calc {
                     }
                 }
                 None => {
+                    graph_changed |= self.graph.nodes.contains_key(&k);
                     self.graph.remove(k);
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
                     if let Some(sh) = wb.sheet_mut(k.0)
@@ -254,6 +259,9 @@ impl Calc {
             }
         }
         self.graph.settle();
+        if graph_changed {
+            self.graph.rebuild_order();
+        }
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
@@ -373,8 +381,9 @@ impl Calc {
             if dirty.is_empty() {
                 break;
             }
-            // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
-            dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
+            // Keep the workbook's cached dependency order across ordinary edits. Only the dirty
+            // formulas are sorted/merged into it; graph mutations rebuild the order above.
+            self.graph.order_dirty(&mut dirty);
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
@@ -392,7 +401,11 @@ impl Calc {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
-                    host.calculate(*k);
+                    if self.graph.is_acyclic() && self.graph.dynamic.is_empty() && !host.iterate {
+                        host.calculate_ready(*k);
+                    } else {
+                        host.calculate(*k);
+                    }
                 }
                 if host.iterate && !host.members.is_empty() {
                     let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
@@ -414,7 +427,16 @@ impl Calc {
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            // Topological order is usually also row-major, but formulas may depend on cells
+            // below them. Keep evaluation order separate from the sorted storage writeback.
+            let mut sorted_dirty = None;
+            if dirty.windows(2).any(|pair| (pair[0].0, pair[0].1.row, pair[0].1.col) > (pair[1].0, pair[1].1.row, pair[1].1.col)) {
+                let mut keys = dirty.clone();
+                keys.sort_unstable_by_key(|(sheet, cell)| (*sheet, cell.row, cell.col));
+                sorted_dirty = Some(keys);
+            }
+            let write_order = sorted_dirty.as_deref().unwrap_or(&dirty);
+            let mut spill_changes = self.write_back(wb, write_order, results, &spills);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
@@ -470,7 +492,7 @@ impl Calc {
                         updates.push((key.1, value));
                     }
                 }
-                sheet.cells.update_values_sorted(&updates);
+                sheet.cells.update_values_sorted_owned(updates);
             }
             start = end;
         }

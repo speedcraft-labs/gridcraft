@@ -85,6 +85,40 @@ impl CellStore {
             start = band_end;
         }
     }
+    /// Like [`Self::update_values_sorted`], but takes ownership of the values. Recalculation has
+    /// already removed each result from its temporary map, so moving the value into its cell
+    /// avoids cloning it once per formula.
+    pub fn update_values_sorted_owned(&mut self, updates: Vec<(CellRef, Value)>) {
+        let mut updates = updates.into_iter().peekable();
+        while let Some((at, _)) = updates.peek() {
+            let band_index = at.row / BAND;
+            let Some(band_arc) = self.bands.get_mut(&band_index) else {
+                while updates.peek().is_some_and(|(c, _)| c.row / BAND == band_index) {
+                    updates.next();
+                }
+                continue;
+            };
+            let band = Arc::make_mut(band_arc);
+            while updates.peek().is_some_and(|(c, _)| c.row / BAND == band_index) {
+                let Some((row_cell, _)) = updates.peek() else { break };
+                let row = row_cell.row;
+                let Some(cols) = band.rows.get_mut(&row) else {
+                    while updates.peek().is_some_and(|(c, _)| c.row == row) {
+                        updates.next();
+                    }
+                    continue;
+                };
+                while updates.peek().is_some_and(|(c, _)| c.row == row) {
+                    let Some((at, value)) = updates.next() else { break };
+                    if let Some(cell) = cols.get_mut(&at.col)
+                        && cell.value != value
+                    {
+                        cell.value = value;
+                    }
+                }
+            }
+        }
+    }
     /// Stores a cell; a default (empty, unstyled) cell is removed instead.
     pub fn set(&mut self, c: CellRef, cell: Cell) {
         if cell.is_blank() {

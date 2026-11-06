@@ -236,6 +236,10 @@ pub struct Graph {
     /// Range indexes changed since the last [`Graph::settle`].
     unsettled_cols: HashSet<(usize, u32)>,
     unsettled_wide: HashSet<usize>,
+    /// Cached formula evaluation order. Rebuilt only when the formula graph changes.
+    order: Vec<Key>,
+    order_rank: HashMap<Key, usize>,
+    acyclic: bool,
 }
 
 /// A formula's precedents split by shape: single cells, column intervals and wide ranges.
@@ -247,6 +251,82 @@ impl Graph {
     }
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
+    }
+
+    /// Builds a stable topological order from the reverse dependency index. Any cyclic formulas
+    /// are appended in row-major order so the existing cycle handling remains the fallback.
+    pub(super) fn rebuild_order(&mut self) {
+        let mut keys: Vec<Key> = self.nodes.keys().copied().collect();
+        keys.sort_unstable();
+        let indexes: HashMap<Key, usize> = keys.iter().enumerate().map(|(i, key)| (*key, i)).collect();
+        let mut indegree = vec![0usize; keys.len()];
+        let mut deps = Vec::new();
+        for &key in &keys {
+            deps.clear();
+            self.dependents(key.0, key.1, &mut deps);
+            deps.sort_unstable();
+            deps.dedup();
+            for dependent in &deps {
+                if let Some(&i) = indexes.get(dependent)
+                    && let Some(degree) = indegree.get_mut(i)
+                {
+                    *degree += 1;
+                }
+            }
+        }
+
+        let mut ready: BTreeSet<usize> = indegree.iter().enumerate().filter_map(|(i, degree)| (*degree == 0).then_some(i)).collect();
+        let mut order = Vec::with_capacity(keys.len());
+        let mut included = vec![false; keys.len()];
+        while let Some(i) = ready.pop_first() {
+            let Some(&key) = keys.get(i) else { continue };
+            included[i] = true;
+            order.push(key);
+            deps.clear();
+            self.dependents(key.0, key.1, &mut deps);
+            deps.sort_unstable();
+            deps.dedup();
+            for dependent in &deps {
+                if let Some(&next) = indexes.get(dependent)
+                    && let Some(degree) = indegree.get_mut(next)
+                    && *degree > 0
+                {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.insert(next);
+                    }
+                }
+            }
+        }
+        self.acyclic = order.len() == keys.len();
+        order.extend(keys.iter().enumerate().filter_map(|(i, key)| (!included[i]).then_some(*key)));
+        self.order_rank = order.iter().enumerate().map(|(rank, key)| (*key, rank)).collect();
+        self.order = order;
+    }
+
+    /// Orders a dirty batch by the cached topology. Large batches use a linear merge with the
+    /// cached order; small batches sort by its rank.
+    pub(super) fn order_dirty(&self, dirty: &mut Vec<Key>) {
+        if dirty.len() >= self.order.len() / 2 {
+            let mut wanted: HashSet<Key> = dirty.drain(..).collect();
+            dirty.reserve(wanted.len());
+            for key in &self.order {
+                if wanted.remove(key) {
+                    dirty.push(*key);
+                }
+            }
+            if !wanted.is_empty() {
+                let mut remainder: Vec<Key> = wanted.into_iter().collect();
+                remainder.sort_unstable();
+                dirty.extend(remainder);
+            }
+        } else {
+            dirty.sort_unstable_by_key(|key| self.order_rank.get(key).copied().unwrap_or(usize::MAX));
+        }
+    }
+
+    pub(super) fn is_acyclic(&self) -> bool {
+        self.acyclic
     }
 
     /// Index entries of a formula's precedents, without duplicates: single cells, column
