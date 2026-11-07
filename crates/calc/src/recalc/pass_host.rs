@@ -72,9 +72,9 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
-    /// Preserve imported cube formula caches during the initial file-load calculation; their
-    /// results depend on external connections GridCraft does not have.
-    preserve_external_cube_cache: bool,
+    /// Preserve imported caches for formulas whose results depend on source-only behavior, such as
+    /// external cube connections or the producer's exact `FORMULATEXT` spelling.
+    preserve_imported_formula_cache: bool,
 }
 
 impl<'a> PassHost<'a> {
@@ -110,12 +110,12 @@ impl<'a> PassHost<'a> {
             stack_top: 0,
             out_of_stack: false,
             python: HashMap::default(),
-            preserve_external_cube_cache: false,
+            preserve_imported_formula_cache: false,
         }
     }
 
-    pub(super) fn with_external_cube_cache(mut self, preserve: bool) -> Self {
-        self.preserve_external_cube_cache = preserve;
+    pub(super) fn with_imported_formula_cache(mut self, preserve: bool) -> Self {
+        self.preserve_imported_formula_cache = preserve;
         self
     }
 
@@ -267,11 +267,21 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
-        if self.preserve_external_cube_cache
+        if self.preserve_imported_formula_cache
             && let Expr::Call(name, _) = expr.as_ref()
             && is_cube_function(name)
             && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
+            && !matches!(&cell.value, Value::Empty)
+        {
+            let value = cell.value.clone();
+            self.pending.remove(&k);
+            self.results.insert(k, value.clone());
+            return value;
+        }
+        if self.preserve_imported_formula_cache
+            && formula_uses_text(expr)
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && !matches!(&cell.value, Value::Empty)
         {
             let value = cell.value.clone();
@@ -514,9 +524,19 @@ fn is_cube_function(name: &str) -> bool {
     matches!(name, "CUBEKPIMEMBER" | "CUBEMEMBER" | "CUBEMEMBERPROPERTY" | "CUBERANKEDMEMBER" | "CUBESET" | "CUBESETCOUNT" | "CUBEVALUE")
 }
 
+fn formula_uses_text(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("FORMULATEXT");
+        }
+    });
+    found
+}
+
 /// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit
 /// intersection. References passed to functions that consume ranges keep their array shape.
-fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
+pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),

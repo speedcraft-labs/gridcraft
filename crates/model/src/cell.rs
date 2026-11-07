@@ -13,6 +13,10 @@ use crate::style::StyleId;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Formula {
     pub text: String,
+    /// Source spelling used to show an imported formula in `FORMULATEXT` and when writing it back.
+    /// The parser's canonical text remains in `text` for evaluation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
     #[serde(skip)]
     pub expr: Option<Arc<Expr>>,
     /// Legacy array formula (Ctrl+Shift+Enter) covering this range; the formula lives in the
@@ -36,12 +40,14 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false, legacy: false },
+            Ok(e) => {
+                Formula { text: gridcraft_formula::print(&e), source_text: None, expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false }
+            }
+            Err(_) => Formula { text: body.to_string(), source_text: None, expr: None, array: None, dynamic: false, legacy: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false }
+        Formula { text: gridcraft_formula::print(&e), source_text: None, expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false }
     }
     /// The parsed expression, re-parsing after deserialization.
     pub fn expr(&self) -> Option<Expr> {

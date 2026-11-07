@@ -2,6 +2,7 @@ use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
+use gridcraft_formula::UnOp;
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -57,7 +58,7 @@ impl<'h> Evaluator<'h> {
                     Ev::V(Value::Bool(f.is_some()))
                 } else {
                     match f {
-                        Some(f) => Ev::V(Value::text(format!("={}", f.text))),
+                        Some(f) => Ev::V(Value::text(formula_text(&f))),
                         None => err(CellError::NA),
                     }
                 }
@@ -431,5 +432,243 @@ impl<'h> Evaluator<'h> {
         }
         let u = n.to_ascii_uppercase();
         gridcraft_functions::lookup(&u).map(|_| u)
+    }
+}
+
+fn formula_text(formula: &gridcraft_model::Formula) -> String {
+    let source = formula.source_text.as_deref().unwrap_or(&formula.text);
+    let display = file_formula_text(source);
+    if formula.legacy
+        && !contains_xlsx_single(source)
+        && let Some(expr) = formula.expr_arc()
+    {
+        let mut intersected = crate::recalc::formula_text_intersection(&expr);
+        if matches!(expr.as_ref(), Expr::Unary(UnOp::Spill, _)) || returns_array(&expr) {
+            intersected = Expr::Unary(UnOp::At, Box::new(expr.as_ref().clone()));
+        }
+        if intersected != *expr {
+            return format!("={}", gridcraft_formula::print(&intersected));
+        }
+    }
+    let display = if contains_xlsx_anchorarray(source) { formula_spacing(&display) } else { display };
+    format!("={display}")
+}
+
+fn returns_array(expr: &Expr) -> bool {
+    let Expr::Call(name, _) = expr else { return false };
+    matches!(
+        name.as_str(),
+        "CHOOSECOLS"
+            | "CHOOSEROWS"
+            | "DROP"
+            | "EXPAND"
+            | "FILTER"
+            | "HSTACK"
+            | "RANDARRAY"
+            | "SEQUENCE"
+            | "SORT"
+            | "SORTBY"
+            | "TAKE"
+            | "TEXTSPLIT"
+            | "TOCOL"
+            | "TOROW"
+            | "UNIQUE"
+            | "VSTACK"
+            | "WRAPCOLS"
+            | "WRAPROWS"
+    )
+}
+
+fn contains_xlsx_single(source: &str) -> bool {
+    source.as_bytes().windows(b"_xlfn.SINGLE".len()).any(|w| w.eq_ignore_ascii_case(b"_xlfn.SINGLE"))
+}
+
+fn contains_xlsx_anchorarray(source: &str) -> bool {
+    source.as_bytes().windows(b"_xlfn.ANCHORARRAY".len()).any(|w| w.eq_ignore_ascii_case(b"_xlfn.ANCHORARRAY"))
+}
+
+/// Converts OOXML-only spellings for spills, implicit intersection, and modern function names
+/// while keeping the formula's original whitespace for `FORMULATEXT`.
+fn file_formula_text(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut i = 0;
+    while i < source.len() {
+        let rest = &source[i..];
+        if rest.starts_with('"') {
+            let end = quoted_formula_end(source, i);
+            out.push_str(&source[i..end]);
+            i = end;
+            continue;
+        }
+        if let Some((token, replacement)) =
+            [("_xlfn.ANCHORARRAY", "spill"), ("_xlfn.SINGLE", "single")].into_iter().find(|(token, _)| starts_ascii_case_insensitive(rest, token))
+        {
+            let after = i + token.len();
+            let mut open = after;
+            while open < source.len() {
+                let ch = source[open..].chars().next().unwrap_or(' ');
+                if !ch.is_whitespace() {
+                    break;
+                }
+                open += ch.len_utf8();
+            }
+            if source.as_bytes().get(open) == Some(&b'(')
+                && let Some(close) = matching_formula_paren(source, open)
+            {
+                let inner = file_formula_text(source[open + 1..close].trim());
+                if replacement == "spill" {
+                    out.push_str(&inner);
+                    out.push('#');
+                } else {
+                    out.push('@');
+                    out.push_str(&inner);
+                }
+                i = close + 1;
+                continue;
+            }
+        }
+        if let Some(prefix) = ["_xlfn.", "_xlpm.", "_xlws."].into_iter().find(|prefix| starts_ascii_case_insensitive(rest, prefix)) {
+            i += prefix.len();
+            continue;
+        }
+        let ch = rest.chars().next().unwrap_or(' ');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn starts_ascii_case_insensitive(text: &str, prefix: &str) -> bool {
+    text.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+fn matching_formula_paren(text: &str, open: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' if quoted && bytes.get(i + 1) == Some(&b'"') => i += 1,
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn quoted_formula_end(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            if bytes.get(i + 1) == Some(&b'"') {
+                i += 2;
+                continue;
+            }
+            return i + 1;
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+/// Excel's formula display inserts spaces around operators and after separators when an
+/// `_xlfn.ANCHORARRAY` call is rendered as a spill reference. Fill only missing spaces, retaining
+/// any spacing already present in the source formula.
+fn formula_spacing(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut i = 0;
+    let mut prev = None;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let end = quoted_formula_end(text, i);
+            out.push_str(&text[i..end]);
+            prev = Some(b'"');
+            i = end;
+            continue;
+        }
+        let b = bytes[i];
+        if b == b',' {
+            out.push(',');
+            if bytes.get(i + 1).is_some_and(|next| !next.is_ascii_whitespace() && *next != b')') {
+                out.push(' ');
+            }
+            prev = Some(b',');
+            i += 1;
+            continue;
+        }
+        let op_len = if matches!(b, b'<' | b'>') && bytes.get(i + 1).is_some_and(|next| matches!(*next, b'=' | b'>')) {
+            2
+        } else if matches!(b, b'+' | b'-' | b'*' | b'/' | b'^' | b'&' | b'=' | b'<' | b'>') {
+            1
+        } else {
+            0
+        };
+        if op_len > 0 {
+            let unary = matches!(b, b'+' | b'-')
+                && prev.is_none_or(|ch| matches!(ch, b'(' | b',' | b'+' | b'-' | b'*' | b'/' | b'^' | b'&' | b'=' | b'<' | b'>'));
+            if !unary && !out.ends_with(char::is_whitespace) {
+                out.push(' ');
+            }
+            out.push_str(&text[i..i + op_len]);
+            i += op_len;
+            if !unary && bytes.get(i).is_some_and(|next| !next.is_ascii_whitespace() && *next != b')') {
+                out.push(' ');
+            }
+            prev = Some(b);
+            continue;
+        }
+        let ch = text[i..].chars().next().unwrap_or(' ');
+        out.push(ch);
+        if !ch.is_whitespace() {
+            prev = (ch.len_utf8() == 1).then_some(ch as u8);
+        }
+        i += ch.len_utf8();
+    }
+    out
+}
+
+#[cfg(test)]
+mod formula_text_tests {
+    use super::{file_formula_text, formula_spacing, formula_text};
+    use gridcraft_model::Formula;
+
+    #[test]
+    fn source_formula_text_keeps_spacing_and_translates_file_spellings() {
+        assert_eq!(file_formula_text("F5:F8 * 2"), "F5:F8 * 2");
+        assert_eq!(file_formula_text("_xlfn._xlws.SORT(F5:F8 + G5:G8)"), "SORT(F5:F8 + G5:G8)");
+        assert_eq!(file_formula_text("_xlfn.LET(_xlpm.x, F5:F7, _xlpm.x*2)"), "LET(x, F5:F7, x*2)");
+        assert_eq!(file_formula_text("_xlfn.ANCHORARRAY(INDEX(F5:F14, 3))"), "INDEX(F5:F14, 3)#");
+        assert_eq!(file_formula_text("_xlfn.SINGLE(CHOOSE(1, G7:G9 * 2, G7:G9 * 3))"), "@CHOOSE(1, G7:G9 * 2, G7:G9 * 3)");
+        assert_eq!(file_formula_text("=\"_xlfn.ANCHORARRAY(H5)\""), "=\"_xlfn.ANCHORARRAY(H5)\"");
+        assert_eq!(formula_spacing(&file_formula_text("CHOOSE(1,_xlfn.ANCHORARRAY( H5)+_xlfn.ANCHORARRAY( G5))")), "CHOOSE(1, H5# + G5#)");
+    }
+
+    #[test]
+    fn legacy_formula_text_shows_implicit_intersection() {
+        let mut range_sum = Formula::new("=F74:F76+G74:G76");
+        range_sum.source_text = Some("F74:F76+G74:G76".into());
+        range_sum.legacy = true;
+        assert_eq!(formula_text(&range_sum), "=@F74:F76+@G74:G76");
+
+        let mut spill = Formula::new("=H5#");
+        spill.source_text = Some("_xlfn.ANCHORARRAY(H5)".into());
+        spill.legacy = true;
+        assert_eq!(formula_text(&spill), "=@H5#");
+
+        let mut unique = Formula::new("=UNIQUE(G7:G9)");
+        unique.source_text = Some("_xlfn.UNIQUE(G7:G9)".into());
+        unique.legacy = true;
+        assert_eq!(formula_text(&unique), "=@UNIQUE(G7:G9)");
     }
 }

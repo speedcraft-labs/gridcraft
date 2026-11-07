@@ -21,6 +21,10 @@ use crate::eval::{Evaluator, Host, precedents, stack_position};
 mod graph;
 mod pass_host;
 
+pub(crate) fn formula_text_intersection(expr: &Expr) -> Expr {
+    pass_host::legacy_intersection(expr, false)
+}
+
 #[cfg(test)]
 use graph::Intervals;
 pub use graph::{FxHasher, Graph, Key};
@@ -194,13 +198,13 @@ impl Calc {
         self.recalc_all_inner(wb, false);
     }
 
-    /// Recalculates a workbook as it is first loaded, retaining cached results for imported
-    /// formulas that need external cube connections GridCraft cannot access.
+    /// Recalculates a workbook as it is first loaded, retaining cached results for formulas that
+    /// depend on source-only behavior, including unavailable cube connections and formula text.
     pub fn recalc_all_from_file(&mut self, wb: &mut Workbook) {
         self.recalc_all_inner(wb, true);
     }
 
-    fn recalc_all_inner(&mut self, wb: &mut Workbook, preserve_external_cube_cache: bool) {
+    fn recalc_all_inner(&mut self, wb: &mut Workbook, preserve_imported_formula_cache: bool) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -213,7 +217,7 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true, preserve_external_cube_cache);
+        self.run(wb, all, true, preserve_imported_formula_cache);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -384,7 +388,7 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool, preserve_external_cube_cache: bool) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool, preserve_imported_formula_cache: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         for _round in 0..8 {
@@ -415,7 +419,7 @@ impl Calc {
                 let mut rng = self.rng;
                 let (results, spills, cycles) = {
                     let mut host =
-                        PassHost::new(wb, &exprs, &mut rng, now).with_python(python).with_external_cube_cache(preserve_external_cube_cache);
+                        PassHost::new(wb, &exprs, &mut rng, now).with_python(python).with_imported_formula_cache(preserve_imported_formula_cache);
                     host.iterate = wb.calc.iterative;
                     for k in &dirty {
                         if self.graph.is_acyclic() && self.graph.dynamic.is_empty() && !host.iterate {

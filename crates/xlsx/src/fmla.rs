@@ -6,6 +6,9 @@ use gridcraft_model::Formula;
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
+    if let Some(source) = &f.source_text {
+        return source.clone();
+    }
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
         Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
