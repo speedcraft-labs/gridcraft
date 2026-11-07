@@ -138,6 +138,8 @@ fn spread() {
     close_tol(ev("VAR.S", vec![c(&d)]), 754.2666667, 1e-9);
     close(ev("VAR.P", vec![c(&d)]), 678.84);
     close(ev("VARP", vec![c(&d)]), 678.84);
+    let excel_cached = [15.0, 77.0, 30.0, 28.0, 31.0, 96.0, 77.0, 53.0, 34.0, 12.545454545454545, 91.0];
+    assert_eq!(crate::util::round_half_away(ev("VAR.P", vec![c(&excel_cached)]).as_f64().unwrap(), 12), 853.648931083943);
     is_err(ev("STDEV.S", vec![n(1.0)]), CellError::Div0);
     close(ev("STDEV.P", vec![n(1.0)]), 0.0);
     let mixed = arr(vec![vec![nv(2.0), Value::Bool(true), tv("x")]]);
