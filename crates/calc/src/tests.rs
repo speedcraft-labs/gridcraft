@@ -285,6 +285,36 @@ fn errors_and_cycles() {
     assert_eq!(t.get("C2"), Value::Error(CellError::Name));
 }
 
+#[test]
+fn file_load_keeps_cached_results_for_external_cube_formulas() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let imported = |text: &str, cached: Value| {
+        let mut formula = Formula::new(text);
+        formula.legacy = true;
+        Cell { value: cached, formula: Some(Arc::new(formula)), ..Cell::default() }
+    };
+    t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), imported("=CUBEMEMBER(\"connection\",\"[Product].[Category].&[4]\")", Value::from("Accessories")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), imported("=CUBEVALUE(\"connection\",A1)", Value::Number(42.5)));
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::from("Accessories"));
+    assert_eq!(t.get("B1"), Value::Number(42.5));
+
+    // An edit to a cube formula's input invalidates the loaded cache. With no connection, the
+    // now-dirty cube formula follows the normal #N/A behavior instead of showing a stale result.
+    t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), Cell::value(Value::from("Bikes")));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert_eq!(t.get("B1"), Value::Error(CellError::NA));
+
+    // Explicit recalculation and newly entered formulas still use the normal evaluator.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::Error(CellError::NA));
+    t.set("C1", "=CUBEVALUE(\"connection\",\"[Measures].[Sales]\")");
+    assert_eq!(t.get("C1"), Value::Error(CellError::NA));
+}
+
 impl T {
     fn iterative(max_iterations: u32, max_change: f64) -> T {
         let mut t = T::new();

@@ -2,8 +2,10 @@
 //!
 //! **Calc oracle.** A workbook saved by Excel (or another calculating producer) carries the
 //! producer's own result next to every formula (`<v>` beside `<f>`). The file is read keeping
-//! those cached values, recalculated from scratch by GridCraft, and every formula cell's new value
-//! is compared with the cached one. Formulas without a cached value (files from writers that don't
+//! those cached values, recalculated by GridCraft's file-load calculation path, and every formula
+//! cell's resulting value is compared with the cached one. Imported legacy CUBE formulas retain
+//! their cached result when the workbook's external OLAP connection is unavailable. Formulas
+//! without a cached value (files from writers that don't
 //! calculate) count as *no oracle*; volatile formulas (`RAND`, `NOW`…) and the formulas that read
 //! them are skipped.
 //!
@@ -359,7 +361,7 @@ fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     report.warnings = warnings;
     let mut fresh = cached.clone();
     let mut calc = Calc::new();
-    calc.recalc_all(&mut fresh);
+    calc.recalc_all_from_file(&mut fresh);
     let trust_cache = !full_calc_on_load(bytes);
     report.calc = oracle(&cached, &fresh, &calc, trust_cache, opts);
     report.round_trip = round_trip(&fresh, bytes, opts);

@@ -191,6 +191,16 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.recalc_all_inner(wb, false);
+    }
+
+    /// Recalculates a workbook as it is first loaded, retaining cached results for imported
+    /// formulas that need external cube connections GridCraft cannot access.
+    pub fn recalc_all_from_file(&mut self, wb: &mut Workbook) {
+        self.recalc_all_inner(wb, true);
+    }
+
+    fn recalc_all_inner(&mut self, wb: &mut Workbook, preserve_external_cube_cache: bool) {
         self.rebuild(wb);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
@@ -203,7 +213,7 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.run(wb, all, true);
+        self.run(wb, all, true, preserve_external_cube_cache);
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -265,7 +275,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, false, false);
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -312,7 +322,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds, &areas);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, false, false);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -374,7 +384,7 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool, preserve_external_cube_cache: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         for _round in 0..8 {
@@ -404,7 +414,8 @@ impl Calc {
                 let now = self.now();
                 let mut rng = self.rng;
                 let (results, spills, cycles) = {
-                    let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                    let mut host =
+                        PassHost::new(wb, &exprs, &mut rng, now).with_python(python).with_external_cube_cache(preserve_external_cube_cache);
                     host.iterate = wb.calc.iterative;
                     for k in &dirty {
                         if self.graph.is_acyclic() && self.graph.dynamic.is_empty() && !host.iterate {

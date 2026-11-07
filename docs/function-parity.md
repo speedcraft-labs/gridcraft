@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-03 · **Change:** minor (GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-07 · **Change:** minor (imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -23,7 +23,9 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
-  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
+  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). On file load, imported CUBE
+  formulas keep the result their source application cached; editing the formula or a precedent
+  recalculates it normally (and returns `#N/A` without an OLAP connection). Excel for Mac also lacks
   WEBSERVICE and FILTERXML; Excel for Windows has them.
 - The measurement is **presence**. Depth (edge cases matching Excel) is estimated below.
 
