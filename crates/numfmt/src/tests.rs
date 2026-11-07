@@ -428,6 +428,26 @@ fn text_fn() {
 }
 
 #[test]
+fn text_elapsed_formats_match_excel_for_minutes_and_negative_durations() {
+    let value = Value::Number(314_159.0 / 100_000.0);
+    assert_eq!(text_function(&value, "s:m\" @ hour \"[hh]", S), Ok("53:23 @ hour 75".into()));
+    assert_eq!(text_function(&value, r#""It was "[h]" [yes, "h"] hours and "mm:ss"#, S), Ok("It was 75 [yes, 75] hours and 23:53".into()));
+    assert_eq!(text_function(&value, r#"[s]" [yes, "ss"] seconds""#, S), Ok("271433 [yes, 271433] seconds".into()));
+
+    let negative = Value::Number(-(2.0 / 24.0 + 3.0 / (24.0 * 60.0) + 4.0 / (24.0 * 3600.0)));
+    let cases: &[(&str, &str)] = &[
+        ("[h]:m:s.000", "-2:3:4.000"),
+        ("[m]:s.000", "-123:4.000"),
+        ("[s].000", "-7384.000"),
+        ("[hh]:mm:ss.0", "-02:03:04.0"),
+        ("[mm]:ss.0", "-123:04.0"),
+    ];
+    for &(format, expected) in cases {
+        assert_eq!(text_function(&negative, format, S), Ok(expected.into()), "{format}");
+    }
+}
+
+#[test]
 fn general_text_matches_excel_for_negative_precision_and_scientific_values() {
     // Copied from Excel for Mac's cached results in GeneralFormatTests.xlsx.
     let cases: &[(f64, &str)] = &[

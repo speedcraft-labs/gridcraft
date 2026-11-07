@@ -473,7 +473,15 @@ fn analyze(raw: Raw) -> Section {
 }
 
 fn analyze_date(mut toks: Vec<Tok>, mut sec: Section) -> Section {
-    // m/mm after hours or before seconds means minutes.
+    let has_calendar = toks.iter().any(|t| matches!(date_part(t), Some(DatePart::Year(_) | DatePart::Day(_))));
+    let has_time = toks.iter().any(|t| {
+        matches!(date_part(t), Some(DatePart::Hour(_) | DatePart::Second(_) | DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_)))
+    });
+    // With only clock fields present, m is a minute even when the format puts seconds first
+    // (for example `s:m`). In a date format, keep the adjacency rules below to distinguish it
+    // from a calendar month.
+    let time_only = has_time && !has_calendar;
+    // m/mm after hours, before seconds, or in a time-only format means minutes.
     for i in 0..toks.len() {
         let Some(Tok::Date(DatePart::Month(n))) = toks.get(i) else { continue };
         let n = *n;
@@ -484,7 +492,7 @@ fn analyze_date(mut toks: Vec<Tok>, mut sec: Section) -> Section {
         let next = toks.get(i + 1..).and_then(|s| s.iter().find_map(date_part));
         let after_h = matches!(prev, Some(DatePart::Hour(_) | DatePart::ElapsedH(_)));
         let before_s = matches!(next, Some(DatePart::Second(_) | DatePart::ElapsedS(_)));
-        if (after_h || before_s)
+        if (time_only || after_h || before_s)
             && let Some(t) = toks.get_mut(i)
         {
             *t = Tok::Date(DatePart::Minute(n));
