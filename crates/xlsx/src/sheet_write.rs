@@ -132,7 +132,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let max_row_outline = sheet.rows.values().map(|r| r.outline).max().unwrap_or(0);
     let max_col_outline = sheet.cols.values().map(|r| r.outline).max().unwrap_or(0);
     s.push_str("<sheetFormatPr");
-    if (sheet.default_col_width - gridcraft_model::DEFAULT_COL_WIDTH).abs() > 0.01 {
+    if let Some(width) = sheet.base_col_width {
+        let _ = write!(s, " baseColWidth=\"{}\"", num(width as f64));
+    }
+    if let Some(width) = sheet.default_col_width_chars {
+        let _ = write!(s, " defaultColWidth=\"{}\"", num(width as f64));
+    } else if sheet.base_col_width.is_none() && (sheet.default_col_width - gridcraft_model::DEFAULT_COL_WIDTH).abs() > 0.01 {
         let _ = write!(s, " defaultColWidth=\"{}\"", num(px_to_col_width(sheet.default_col_width)));
     }
     let _ = write!(s, " defaultRowHeight=\"{}\"", num(px_to_pt(sheet.default_row_height)));

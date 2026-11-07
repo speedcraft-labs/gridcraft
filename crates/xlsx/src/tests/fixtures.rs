@@ -738,6 +738,8 @@ fn custom_widths_equal_to_the_default_round_trip() {
     let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.default_col_width, 64.0);
+    assert_eq!(s.base_col_width, Some(8.0));
+    assert_eq!(s.default_col_width_chars, None);
     for c in 3..=6 {
         assert_eq!(s.cols.get(&c).and_then(|i| i.size), Some(64.0), "read col {c}");
     }
@@ -745,6 +747,9 @@ fn custom_widths_equal_to_the_default_round_trip() {
     let bytes = crate::write_xlsx(&wb).unwrap();
     let mut pkg = crate::package::Package::open(&bytes).unwrap();
     let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let sheet_format = sheet.child("sheetFormatPr").unwrap();
+    assert_eq!(sheet_format.attr_f64("baseColWidth"), Some(8.0));
+    assert_eq!(sheet_format.attr_f64("defaultColWidth"), None);
     let cols: Vec<_> =
         sheet.child("cols").unwrap().kids("col").map(|c| (c.attr_u32("min"), c.attr_u32("max"), c.flag("customWidth", false))).collect();
     assert_eq!(cols, [(Some(4), Some(7), true)]);
