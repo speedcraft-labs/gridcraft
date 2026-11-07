@@ -294,7 +294,11 @@ impl DocState {
     /// made in this session.
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
-        calc.recalc_all(&mut wb);
+        if trust == Trust::FromFile {
+            calc.recalc_all_from_file(&mut wb);
+        } else {
+            calc.recalc_all(&mut wb);
+        }
         Self::with_calc(wb, calc, path, title, trust)
     }
     /// A workbook as its file saved it: the dependency graph is built but nothing is

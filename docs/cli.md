@@ -69,7 +69,7 @@ Measures calculation correctness and file fidelity on any set of `.xlsx`/`.xlsm`
 recursively). Nothing is written next to the inputs.
 
 **Calc oracle.** A file saved by Excel (or another calculating app) stores the app's own result beside every formula.
-`check` reads each file keeping those cached values, recalculates every formula with GridCraft and compares:
+`check` reads each file keeping those cached values, recalculates formulas with GridCraft and compares:
 numbers within a relative `--tolerance` (absolute when the magnitude is below 1), errors by kind, text and logicals
 exactly. Skipped, and counted separately:
 
@@ -77,6 +77,10 @@ exactly. Skipped, and counted separately:
   recalculation on load (`fullCalcOnLoad`: libraries that don't calculate, such as xlsxwriter, store 0 or nothing).
 - *volatile*: `RAND`, `RANDARRAY`, `RANDBETWEEN`, `NOW`, `TODAY`, `INFO`, `CELL("filename")`, names that use them, and
   every formula that reads such a cell (through the dependency graph).
+
+Imported legacy CUBE formulas retain their cached values during file-load calculation when GridCraft has no OLAP
+connection to evaluate them. `check` follows this file-load path, so these cells are compared against the producer's
+cache while new or edited CUBE formulas still return `#N/A` without a connection.
 
 A logical result the producer cached as the number 1 or 0, without `t="b"` (Business Central's "Open in Excel"
 exports write `<c><f>TRUE()</f><v>1</v></c>`), holds the same value: it matches GridCraft's TRUE or FALSE and is also

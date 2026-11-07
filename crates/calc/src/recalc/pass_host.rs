@@ -72,6 +72,9 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
+    /// Preserve imported cube formula caches during the initial file-load calculation; their
+    /// results depend on external connections GridCraft does not have.
+    preserve_external_cube_cache: bool,
 }
 
 impl<'a> PassHost<'a> {
@@ -107,7 +110,13 @@ impl<'a> PassHost<'a> {
             stack_top: 0,
             out_of_stack: false,
             python: HashMap::default(),
+            preserve_external_cube_cache: false,
         }
+    }
+
+    pub(super) fn with_external_cube_cache(mut self, preserve: bool) -> Self {
+        self.preserve_external_cube_cache = preserve;
+        self
     }
 
     /// Adds the dirty Python cells of the pass and their kept results: like the formulas, they
@@ -258,6 +267,18 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
+        if self.preserve_external_cube_cache
+            && let Expr::Call(name, _) = expr.as_ref()
+            && is_cube_function(name)
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
+            && !matches!(&cell.value, Value::Empty)
+        {
+            let value = cell.value.clone();
+            self.pending.remove(&k);
+            self.results.insert(k, value.clone());
+            return value;
+        }
         let legacy_formula = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.legacy);
         if !legacy_formula && let Some(value) = self.simple_numeric_add(k, expr) {
             self.pending.remove(&k);
@@ -487,6 +508,10 @@ impl PassHost<'_> {
             }
         })
     }
+}
+
+fn is_cube_function(name: &str) -> bool {
+    matches!(name, "CUBEKPIMEMBER" | "CUBEMEMBER" | "CUBEMEMBERPROPERTY" | "CUBERANKEDMEMBER" | "CUBESET" | "CUBESETCOUNT" | "CUBEVALUE")
 }
 
 /// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit
