@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, ControlKind, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -91,6 +91,10 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
             pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+        } else {
+            // Keep unsupported metafile formats visible in print. The original media part is
+            // still preserved in the workbook; this box makes the missing preview explicit.
+            draw_object_placeholder(pg, (x, y, w, h), "Picture preview unavailable", b.k);
         }
     }
     for shp in &sh.shapes {
@@ -130,7 +134,69 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
+    for control in sh.controls.iter().filter(|c| c.print) {
+        let r = anchor_rect(sh, &control.anchor);
+        if !visible(r) {
+            continue;
+        }
+        let (x, y, w, h) = place(r);
+        draw_control_placeholder(pg, control.kind, &control.text, control.display_name().as_str(), (x, y, w, h), b.k);
+    }
+    // Some Excel controls and OLE objects are preserved as opaque OOXML and therefore have no
+    // modelled anchor. Keep their presence visible in the exported document instead of silently
+    // printing a blank sheet. Their original package parts remain untouched on save.
+    let preserved_label = if let Some(preserved) = &sh.preserved {
+        let controls = preserved.elements.iter().filter(|e| e.slot == "controls").count();
+        let ole = preserved.elements.iter().filter(|e| e.slot == "oleObjects").count();
+        let start = super::print_range(sh).map(|r| r.start);
+        if (controls > 0 || ole > 0) && start.is_some_and(|cell| block.contains(cell)) {
+            Some(match (controls > 0, ole > 0) {
+                (true, true) => "Embedded controls and OLE preview unavailable",
+                (true, false) => "Embedded control preview unavailable",
+                (false, true) => "Embedded OLE preview unavailable",
+                (false, false) => "",
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     pg.restore();
+    if let Some(label) = preserved_label {
+        // These preserved items have no modelled anchor. Put the fallback in the page margin so
+        // it never covers worksheet values or fills.
+        draw_object_placeholder(pg, (bx, by + bh + 2.0, bw, 14.0), label, 1.0);
+    }
+}
+
+fn draw_control_placeholder(pg: &mut Page, kind: ControlKind, text: &str, name: &str, (x, y, w, h): (f32, f32, f32, f32), k: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    match kind {
+        ControlKind::Button => {
+            pg.fill_rect(x, y, w, h, [0xF2, 0xF2, 0xF2]);
+            pg.rect_stroke(x, y, w, h, 0.75 * k, [0x70, 0x70, 0x70]);
+            let caption = if text.trim().is_empty() { name } else { text };
+            pg.text(x + 4.0 * k, y + (h / 2.0) + 3.0 * k, (9.0 * k).max(6.0), Font::Helvetica, [0x20, 0x20, 0x20], caption);
+        }
+        ControlKind::Slider | ControlKind::Spin => {
+            pg.fill_rect(x, y, w, h, [0xE6, 0xE6, 0xE6]);
+            pg.rect_stroke(x, y, w, h, 0.75 * k, [0x70, 0x70, 0x70]);
+            let caption = format!("{}: {}", name, text.trim());
+            pg.text(x + 3.0 * k, y + (h / 2.0) + 3.0 * k, (8.0 * k).max(6.0), Font::Helvetica, [0x20, 0x20, 0x20], &caption);
+        }
+    }
+}
+
+fn draw_object_placeholder(pg: &mut Page, (x, y, w, h): (f32, f32, f32, f32), label: &str, k: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    pg.fill_rect(x, y, w, h, [0xF2, 0xF2, 0xF2]);
+    pg.rect_stroke(x, y, w, h, 0.75 * k, [0x90, 0x90, 0x90]);
+    pg.text(x + 4.0 * k, y + (h / 2.0) + 3.0 * k, (8.0 * k).max(6.0), Font::Helvetica, [0x50, 0x50, 0x50], label);
 }
 
 fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {

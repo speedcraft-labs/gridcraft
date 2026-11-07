@@ -529,6 +529,83 @@ fn charts_and_images_are_drawn() {
 }
 
 #[test]
+fn form_controls_are_printed_as_placeholders_and_ole_presence_is_visible() {
+    let mut s = s();
+    let doc = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut doc.wb);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.controls.push(FormControl {
+        id: 1,
+        kind: ControlKind::Button,
+        text: "Run report".into(),
+        anchor: Anchor { cell: CellRef::new(3, 2), width: 90.0, height: 24.0, ..Default::default() },
+        ..Default::default()
+    });
+    sh.controls.push(FormControl {
+        id: 2,
+        kind: ControlKind::Button,
+        text: "Do not print".into(),
+        anchor: Anchor { cell: CellRef::new(5, 2), width: 90.0, height: 24.0, ..Default::default() },
+        print: false,
+        ..Default::default()
+    });
+    sh.preserved = Some(std::sync::Arc::new(gridcraft_model::Preserved {
+        elements: vec![gridcraft_model::PreservedXml { slot: "oleObjects".into(), xml: "<oleObjects/>".into() }],
+        ..Default::default()
+    }));
+
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "(Run report) Tj"), "the printable form control should have a PDF placeholder");
+    assert!(!contains(&pdf, "(Do not print) Tj"), "a control marked not to print must stay hidden");
+    assert!(contains(&pdf, "Embedded OLE preview unavailable"), "preserved OLE content should not disappear silently");
+}
+
+#[test]
+fn libreoffice_corpus_pdf_reproducers_keep_sheet_content_and_objects() -> std::result::Result<(), String> {
+    let Ok(root) = std::env::var("ARTCRAFT_CORPUS") else { return Ok(()) };
+    let root = std::path::PathBuf::from(root);
+    let render = |relative: &str| -> std::result::Result<(Vec<u8>, u64), String> {
+        let mut session = s();
+        let path = root.join(relative);
+        session.execute("file.open", json!({"path": path.to_string_lossy()})).map_err(|e| format!("open {}: {e}", path.display()))?;
+        Ok(pdf_of(&mut session, json!({"sheets": "all"})))
+    };
+
+    let (forum, forum_pages) = render("office-libreoffice/sc/qa/unit/data/xlsx/forum-mso-en4-134670.xlsx")?;
+    assert!(forum_pages > 3, "the workbook PDF must include the data and summary sheets, not only active Sheet3");
+    assert!(contains(&forum, "Convenience Stores"));
+    assert!(contains(&forum, "Count of Lead Status"));
+
+    let (connection, connection_pages) =
+        render("office-openxml-sdk/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/v2FxTestFiles/spreadsheet/Connection.xlsx")?;
+    assert!(connection_pages >= 9);
+    assert!(contains(&connection, "Filter rows"));
+
+    let (pictures, _) = render(
+        "office-openxml-sdk/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/Photo Formats - CGM-O12-XL-Pictures.xlsx",
+    )?;
+    assert!(
+        contains(&pictures, "/Subtype /Image") || contains(&pictures, "Picture preview unavailable"),
+        "pictures on non-active sheets should render or have an explicit unsupported-format placeholder"
+    );
+
+    let (controls, _) = render("office-libreoffice/sc/qa/unit/data/xlsx/tdf111980_radioButtons.xlsx")?;
+    assert!(contains(&controls, "Embedded control preview unavailable"));
+
+    let (ole, _) = render("office-poi/spreadsheet/58325_db.xlsx")?;
+    assert!(contains(&ole, "Embedded OLE preview unavailable"));
+
+    let (chart_sheet, chart_sheet_pages) = render("office-poi/spreadsheet/56557.xlsx")?;
+    assert_eq!(chart_sheet_pages, 1);
+    assert!(contains(&chart_sheet, "Chart sheet preview unavailable"));
+
+    let (spreadsheet, _) = render("office-openxml-sdk/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestFiles/Spreadsheet.xlsx")?;
+    assert!(contains(&spreadsheet, "/Subtype /Image"));
+    Ok(())
+}
+
+#[test]
 fn page_setup_edits_settings() {
     let mut s = s();
     let r = s

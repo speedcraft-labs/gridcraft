@@ -6,15 +6,15 @@
 //! the sheet's page order ("down, then over" by default, or "over, then down"). Each page is
 //! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (fonts mapped
 //! to the standard 14 PDF fonts), merged cells, wrapping, overflow into empty neighbours,
-//! conditional formats, table styles, charts, images, shapes and sparklines. Headers and footers
+//! conditional formats, table styles, charts, images, shapes, form-control previews and sparklines. Headers and footers
 //! support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z` codes.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
-use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{Alignment, FormControl, Image, SheetViewMode};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId,
-    StyleTable, Underline, VAlign, Visibility, Workbook,
+    Anchor, BorderLine, BorderStyle, Borders, Color, ControlKind, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet,
+    Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
 };
 use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
 use serde_json::{Value as Json, json};
@@ -27,7 +27,7 @@ mod layout;
 mod objects;
 mod text;
 
-use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
+use draw::{PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
 use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
@@ -91,11 +91,16 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 pub const MAX_PAGES: usize = 2000;
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, all_sheets: bool) -> (Vec<u8>, usize) {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
-    let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
+    let chart_sheets: Vec<_> = if all_sheets {
+        wb.preserved.iter().flat_map(|p| p.sheets.iter()).filter(|s| s.visibility == Visibility::Visible).collect()
+    } else {
+        Vec::new()
+    };
+    let total: usize = layouts.iter().map(|l| l.pages.len()).sum::<usize>() + chart_sheets.len();
     let (date, time) = hf_date_time(wb);
     let mut page_no = 0usize;
     let mut pending_links = Vec::new();
@@ -120,26 +125,20 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             let page_index = doc.page_count();
             let pg = doc.add_page(lay.page_w, lay.page_h);
             let mut y = oy + lay.heading_h * k;
-            let mut body: Option<Block> = None;
             for (rsi, rs) in rsegs.iter().enumerate() {
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_objects(pg, wb, lay.sheet, sh, &b, &mut pics);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
                     x += seg_size(sh, *cs, false) * k;
-                    if rsi + 1 == rsegs.len() && csi + 1 == csegs.len() {
-                        body = Some(b);
-                    }
                 }
                 y += seg_size(sh, *rs, true) * k;
-            }
-            if let Some(b) = &body {
-                draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
@@ -157,6 +156,15 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             };
             draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
         }
+    }
+    // Chart sheets are preserved byte-for-byte but aren't in the worksheet model, so they can't
+    // use the editable chart renderer. In a workbook PDF, keep each one visible with its name
+    // and an explicit preview fallback rather than silently omitting the sheet.
+    for sheet in chart_sheets {
+        let pg = doc.add_page(612.0, 792.0);
+        pg.rect_stroke(36.0, 36.0, 540.0, 720.0, 0.75, [0xA0, 0xA0, 0xA0]);
+        pg.text(48.0, 72.0, 16.0, Font::HelveticaBold, [0x20, 0x20, 0x20], &sheet.name);
+        pg.text(48.0, 96.0, 10.0, Font::Helvetica, [0x50, 0x50, 0x50], "Chart sheet preview unavailable");
     }
     for link in pending_links {
         if let Some((target_page, x, y)) = printed_target(wb, &printed_blocks, link.sheet, &link.target)
@@ -177,7 +185,7 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path, opts.all_sheets))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
