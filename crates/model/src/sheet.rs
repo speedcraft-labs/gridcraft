@@ -109,6 +109,12 @@ pub struct Sheet {
     pub rows: BTreeMap<u32, LineInfo>,
     /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
     pub default_col_width: f32,
+    /// The file's default column width in character units, when it specified one explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_col_width_chars: Option<f32>,
+    /// The file's base column width in character units, kept for formula results and round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_col_width: Option<f32>,
     pub default_row_height: f32,
     pub merges: Vec<RangeRef>,
     /// Frozen rows and columns (top/left).
@@ -198,6 +204,8 @@ impl Sheet {
             cols: BTreeMap::new(),
             rows: BTreeMap::new(),
             default_col_width: DEFAULT_COL_WIDTH,
+            default_col_width_chars: None,
+            base_col_width: None,
             default_row_height: DEFAULT_ROW_HEIGHT,
             merges: vec![],
             freeze: None,
@@ -475,6 +483,17 @@ impl Sheet {
             Some(i) if i.hidden => 0.0,
             Some(LineInfo { size: Some(w), .. }) => *w,
             _ => self.default_col_width,
+        }
+    }
+
+    /// The width returned by Excel's `CELL("width", ref)`, before Excel rounds to an integer.
+    pub fn col_width_chars(&self, col: u32) -> f64 {
+        match self.cols.get(&col) {
+            Some(LineInfo { hidden: true, .. }) => 0.0,
+            Some(LineInfo { size: Some(px), .. }) => points_to_chars(*px as f64),
+            Some(_) | None => {
+                self.default_col_width_chars.or(self.base_col_width).map(f64::from).unwrap_or_else(|| points_to_chars(self.default_col_width as f64))
+            }
         }
     }
     pub fn row_height(&self, row: u32) -> f32 {

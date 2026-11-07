@@ -225,7 +225,10 @@ pub(super) fn default_width(s: &mut Session, p: &Json) -> Result<Json> {
     let w = f64_param(p, "width").ok_or_else(|| bad("home.defaultWidth", "missing `width`"))?;
     let si = target_sheet(s, p)?;
     edit(s, |cx| {
-        cx.sheet_mut(si)?.default_col_width = w.clamp(0.0, 1800.0) as f32;
+        let sheet = cx.sheet_mut(si)?;
+        sheet.default_col_width = w.clamp(0.0, 1800.0) as f32;
+        sheet.default_col_width_chars = None;
+        sheet.base_col_width = None;
         Ok(Json::Null)
     })
 }

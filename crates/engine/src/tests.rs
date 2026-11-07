@@ -4458,6 +4458,12 @@ fn line_sizes_and_freeze_panes_take_a_sheet() {
     s.execute("home.columnWidth", json!({"sheet": null, "cols": "Data!C:C", "chars": 20})).unwrap();
     s.execute("home.rowHeight", json!({"sheet": 1, "rows": "1:1", "height": 40})).unwrap();
     s.execute("home.hideColumns", json!({"sheet": "Data", "cols": "E:E"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let data = wb.sheet_mut(1).unwrap();
+        data.base_col_width = Some(10.0);
+        data.default_col_width_chars = Some(10.71);
+    }
     s.execute("home.defaultWidth", json!({"sheet": "Data", "width": 80})).unwrap();
     let data = sheet(&s, 1);
     assert_eq!(data.freeze, Some((1, 0)));
@@ -4465,6 +4471,8 @@ fn line_sizes_and_freeze_panes_take_a_sheet() {
     assert_eq!(data.row_height(0), 40.0);
     assert!(data.cols.get(&4).is_some_and(|c| c.hidden));
     assert_eq!(data.default_col_width, 80.0);
+    assert_eq!(data.base_col_width, None);
+    assert_eq!(data.default_col_width_chars, None);
     assert_eq!(sheet(&s, 0), before, "the active sheet is untouched");
     assert_eq!(s.doc().unwrap().wb.active_sheet(), 0);
 

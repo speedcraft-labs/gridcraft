@@ -2095,6 +2095,22 @@ fn cell_width_is_the_column_width_dialog_value_rounded() {
     assert_eq!([t.num("H1"), t.num("H2"), t.num("H3"), t.num("H4"), t.num("H5")], [8.0, 11.0, 12.0, 11.0, 3.0]);
 }
 
+#[test]
+fn cell_width_keeps_imported_default_character_units() {
+    let mut t = T::new();
+    let sheet = t.wb.sheet_mut(0).unwrap();
+    sheet.default_col_width = 80.0;
+    sheet.base_col_width = Some(10.0);
+
+    t.set("A1", "=CELL(\"width\",A:A)");
+    t.set("B1", "=CELL(\"width\",B:B)");
+    assert_eq!([t.num("A1"), t.num("B1")], [10.0, 10.0]);
+
+    t.wb.sheet_mut(0).unwrap().default_col_width_chars = Some(10.71);
+    t.set("C1", "=CELL(\"width\",C:C)");
+    assert_eq!(t.num("C1"), 11.0);
+}
+
 /// Expected results are Excel's, from Apache POI's `DGet.xls` (rows 46-49): a criteria cell holding
 /// a formula under a label that names no field is evaluated for every record.
 #[test]
