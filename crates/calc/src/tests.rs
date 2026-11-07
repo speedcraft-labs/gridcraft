@@ -1333,6 +1333,20 @@ fn imported_legacy_formulas_preserve_range_functions_and_explicit_intersections(
 }
 
 #[test]
+fn imported_legacy_ets_confint_keeps_its_value_and_timeline_ranges() {
+    let mut t = T::new();
+    for i in 0..12 {
+        t.set(&format!("A{}", i + 1), &(i + 1).to_string());
+        t.set(&format!("B{}", i + 1), &(10 + i).to_string());
+    }
+    let mut formula = Formula::new("=FORECAST.ETS.CONFINT(13,B1:B12,A1:A12,0.95,1,1)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D1"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D1"))]);
+    assert!(matches!(t.get("D1"), Value::Number(_)), "range arguments must not be implicitly intersected");
+}
+
+#[test]
 fn array_broadcast_result_is_capped() {
     // A full column against a full row broadcasts to 1048576 x 16384 (17 billion cells, about
     // 400 GB): each operand is within its own cap, so only the product check stops the abort.

@@ -625,7 +625,8 @@ fn legacy_array_arg(name: &str, index: usize) -> bool {
         | "QUARTILE.INC" | "QUARTILE.EXC" | "LARGE" | "SMALL" | "TRIMMEAN" => index == 0,
         "RANK" | "RANK.AVG" | "RANK.EQ" => index == 1,
         "FORECAST" | "FORECAST.LINEAR" => index == 1 || index == 2,
-        "FORECAST.ETS" => index == 1 || index == 2,
+        "FORECAST.ETS" | "FORECAST.ETS.CONFINT" => index == 1 || index == 2,
+        "FORECAST.ETS.SEASONALITY" | "FORECAST.ETS.STAT" => index == 0 || index == 1,
         "DCOUNT" | "DCOUNTA" | "DAVERAGE" | "DGET" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DSUM" | "DVAR" | "DVARP" => {
             index == 0 || index == 2
         }
