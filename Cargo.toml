@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]
+craft-text = { git = "https://github.com/speedcraft-labs/craft-libs", rev = "bb27188f00f58ecd6dacef7ae57c2da79957dbe0", default-features = false, features = ["matching"] }
 # internal
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
