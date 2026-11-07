@@ -1,3 +1,4 @@
+use super::fidelity::as_cached;
 use super::*;
 
 /// Functions whose result depends on the clock, a random generator or the environment.
@@ -200,7 +201,10 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
                 None => vec!["(unparsed)".to_string()],
             };
             let bool_as_number = bool_cached_as_number(&cell.value, &actual);
-            let ok = bool_as_number || values_match(&cell.value, &actual, opts.tolerance);
+            // Compare the in-memory result in the same form that XLSX can store it. Excel's
+            // cached error code for #SPILL! and #CALC! is #VALUE!, and a circular result is
+            // written as 0.
+            let ok = bool_as_number || values_match(&cell.value, &as_cached(actual.clone()), opts.tolerance);
             if bool_as_number {
                 r.bool_as_number += 1;
             }
