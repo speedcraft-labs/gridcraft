@@ -1339,6 +1339,42 @@ fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
 }
 
 #[test]
+fn imported_legacy_scalar_formula_intersects_defined_names() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {
+        t.set(at, value);
+    }
+    t.wb.names.extend([
+        gridcraft_model::DefinedName {
+            name: "GlobalRange".into(),
+            scope: None,
+            formula: "Sheet1!$A$1:$A$3".into(),
+            comment: String::new(),
+            hidden: false,
+        },
+        gridcraft_model::DefinedName { name: "GlobalArray".into(), scope: None, formula: "{1,2;4,5}".into(), comment: String::new(), hidden: false },
+    ]);
+
+    let mut range = Formula::new("=GlobalRange");
+    let mut array = Formula::new("=GlobalArray");
+    let mut sum = Formula::new("=SUM(GlobalArray)");
+    range.legacy = true;
+    array.legacy = true;
+    sum.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B2"), Cell::formula(range));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D4"), Cell::formula(array));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E4"), Cell::formula(sum));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B2")), (0, c("D4")), (0, c("E4"))]);
+
+    assert_eq!(t.num("B2"), 20.0, "the defined range intersects the formula row");
+    assert_eq!(t.num("D4"), 1.0, "an array-valued name intersects at its top-left item");
+    assert_eq!(t.num("E4"), 12.0, "SUM still consumes the full array from the name");
+    for at in ["B2", "D4", "E4"] {
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c(at)), "legacy {at} does not spill");
+    }
+}
+
+#[test]
 fn imported_legacy_scalar_formula_intersects_nested_array_operations() {
     let mut t = T::new();
     for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {
