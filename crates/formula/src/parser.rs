@@ -132,6 +132,11 @@ fn word_is_cell(w: &str) -> Option<Anchor> {
 /// function, never the built-in of the same name, and files need it back.
 pub fn normalize_function_name(name: &str) -> String {
     let u = name.to_ascii_uppercase();
+    // LibreOffice's Analysis ToolPak compatibility name is serialized in XLSX for EOMONTH.
+    // The function has standard Excel semantics and is implemented under its canonical name.
+    if u == "COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEOMONTH" {
+        return "EOMONTH".to_string();
+    }
     for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS."] {
         if let Some(r) = u.strip_prefix(p) {
             return r.to_string();
