@@ -357,6 +357,19 @@ impl PassHost<'_> {
             self.taint = outer_taint;
             return Value::Error(CellError::Calc);
         }
+        let v = if self.preserve_imported_formula_cache
+            && legacy_formula
+            && matches!(&v, Value::Error(CellError::Ref))
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && !matches!(&cell.value, Value::Empty)
+        {
+            // A workbook can retain a cached result after its linked sheet or workbook is
+            // unavailable. Keep that result during initial load; edits and explicit recalculation
+            // use the evaluator and report the unresolved reference.
+            cell.value.clone()
+        } else {
+            v
+        };
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {

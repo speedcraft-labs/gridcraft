@@ -316,6 +316,23 @@ fn file_load_keeps_cached_results_for_external_cube_formulas() {
 }
 
 #[test]
+fn file_load_keeps_cached_results_for_unavailable_references() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let mut formula = Formula::new("='Missing Sheet'!A1");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), Cell { value: Value::Number(42.0), formula: Some(Arc::new(formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(42.0));
+
+    // A later explicit calculation reports the unresolved sheet normally.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Ref));
+}
+
+#[test]
 fn file_load_keeps_cached_results_for_formula_text() {
     use std::sync::Arc;
 
