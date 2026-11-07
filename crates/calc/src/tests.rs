@@ -1305,6 +1305,55 @@ fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
 }
 
 #[test]
+fn imported_legacy_scalar_formula_intersects_nested_array_operations() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {
+        t.set(at, value);
+    }
+
+    // An ordinary imported formula isn't a Ctrl+Shift+Enter formula. Excel intersects the
+    // nested range expressions at the formula row, while a newly entered formula can use arrays.
+    let mut formula = Formula::new("=SUM(IF(A1:A3>0,A1:A3,0))");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D2"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D2"))]);
+    assert_eq!(t.get("D2"), Value::Number(20.0));
+
+    t.set("E2", "=SUM(IF(A1:A3>0,A1:A3,0))");
+    assert_eq!(t.get("E2"), Value::Number(60.0));
+}
+
+#[test]
+fn imported_legacy_sumproduct_keeps_nested_array_context() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "20")] {
+        t.set(at, value);
+    }
+
+    let mut formula = Formula::new("=SUMPRODUCT((A1:A4<>\"\")/COUNTIF(A1:A4,A1:A4&\"\"))");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D2"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D2"))]);
+    assert_eq!(t.get("D2"), Value::Number(2.0));
+}
+
+#[test]
+fn imported_legacy_sum_keeps_reference_returning_ranges() {
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    let mut offset = Formula::new("=SUM(OFFSET(A1,0,0,2))");
+    let mut indirect = Formula::new("=SUM(INDIRECT(\"A1:A2\"))");
+    offset.legacy = true;
+    indirect.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D1"), Cell::formula(offset));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E1"), Cell::formula(indirect));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D1")), (0, c("E1"))]);
+    assert_eq!(t.get("D1"), Value::Number(3.0));
+    assert_eq!(t.get("E1"), Value::Number(3.0));
+}
+
+#[test]
 fn imported_legacy_formulas_preserve_range_functions_and_explicit_intersections() {
     // Range arguments and scalar results mirror cases in Apache POI's
     // FormulaEvalTestData_Copy.xlsx; CELL/SUBTOTAL and the explicit intersection use the same

@@ -556,7 +556,23 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
         }
         Expr::Call(name, args) => Expr::Call(
             name.clone(),
-            args.iter().enumerate().map(|(i, a)| legacy_intersection(a, array_context || legacy_array_arg(name, i))).collect(),
+            args.iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    let consumes_range = legacy_array_arg(name, i);
+                    let returns_reference_or_array = matches!(
+                        a,
+                        Expr::Call(result, _)
+                            if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
+                    ) || matches!(a, Expr::Unary(UnOp::Spill, _));
+                    let nested_array_context =
+                        array_context || (name == "SUMPRODUCT" && consumes_range) || (consumes_range && returns_reference_or_array);
+                    // Keep a range argument for the consuming function without making every
+                    // nested expression an array formula. SUMPRODUCT evaluates expressions
+                    // element by element, so its array context continues through its arguments.
+                    if consumes_range && matches!(a, Expr::Ref(_)) { a.clone() } else { legacy_intersection(a, nested_array_context) }
+                })
+                .collect(),
         ),
         Expr::Invoke(c, args) => Expr::Invoke(Box::new(legacy_intersection(c, false)), args.iter().map(|a| legacy_intersection(a, false)).collect()),
         Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection(x, array_context))),
