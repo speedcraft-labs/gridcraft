@@ -1,7 +1,7 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
-use gridcraft_formula::{BinOp, Expr, SheetSel};
+use gridcraft_formula::{BinOp, Expr, SheetSel, UnOp};
 
 /// Formulas a formula may calculate on demand one inside the other (each needing one another's
 /// value before it is done). Each level takes stack, so a chain deeper than this is suspended and
@@ -258,7 +258,8 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
-        if let Some(value) = self.simple_numeric_add(k, expr) {
+        let legacy_formula = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.legacy);
+        if !legacy_formula && let Some(value) = self.simple_numeric_add(k, expr) {
             self.pending.remove(&k);
             self.results.insert(k, value.clone());
             return value;
@@ -295,7 +296,7 @@ impl PassHost<'_> {
         if self.iterate {
             self.stack.push(k);
         }
-        let expr = std::sync::Arc::clone(expr);
+        let expr = if legacy_formula { std::sync::Arc::new(legacy_intersection(expr, false)) } else { std::sync::Arc::clone(expr) };
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
@@ -485,6 +486,158 @@ impl PassHost<'_> {
                 (new, old) => new == old,
             }
         })
+    }
+}
+
+/// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit
+/// intersection. References passed to functions that consume ranges keep their array shape.
+fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
+    match expr {
+        Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
+        Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),
+        Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection(x, array_context))),
+        Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
+            Expr::Binary(*op, Box::new(legacy_intersection(a, true)), Box::new(legacy_intersection(b, true)))
+        }
+        Expr::Binary(op, a, b) => Expr::Binary(*op, Box::new(legacy_intersection(a, array_context)), Box::new(legacy_intersection(b, array_context))),
+        // These can return a reference or an array even from a scalar cell. Excel's implicit
+        // intersection applies to that result (INDEX/OFFSET/INDIRECT) or selects its first row or
+        // column number (ROW/COLUMN), so intersect the call result after keeping its input ranges.
+        Expr::Call(name, args)
+            if !array_context && matches!(name.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T") =>
+        {
+            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            Expr::Unary(UnOp::At, Box::new(call))
+        }
+        Expr::Call(name, args) => Expr::Call(
+            name.clone(),
+            args.iter().enumerate().map(|(i, a)| legacy_intersection(a, array_context || legacy_array_arg(name, i))).collect(),
+        ),
+        Expr::Invoke(c, args) => Expr::Invoke(Box::new(legacy_intersection(c, false)), args.iter().map(|a| legacy_intersection(a, false)).collect()),
+        Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection(x, array_context))),
+        _ => expr.clone(),
+    }
+}
+
+fn legacy_array_arg(name: &str, index: usize) -> bool {
+    matches!(
+        name,
+        "SUM"
+            | "AVERAGE"
+            | "AVERAGEA"
+            | "MIN"
+            | "MINA"
+            | "MAX"
+            | "MAXA"
+            | "COUNT"
+            | "COUNTA"
+            | "COUNTBLANK"
+            | "PRODUCT"
+            | "SUMSQ"
+            | "MEDIAN"
+            | "MODE"
+            | "MODE.SNGL"
+            | "MODE.MULT"
+            | "STDEV"
+            | "STDEV.S"
+            | "STDEV.P"
+            | "STDEVP"
+            | "STDEVA"
+            | "STDEVPA"
+            | "VAR"
+            | "VAR.S"
+            | "VAR.P"
+            | "VARP"
+            | "VARA"
+            | "VARPA"
+            | "AVEDEV"
+            | "DEVSQ"
+            | "GEOMEAN"
+            | "HARMEAN"
+            | "KURT"
+            | "SKEW"
+            | "SKEW.P"
+            | "AND"
+            | "OR"
+            | "XOR"
+            | "SUMPRODUCT"
+            | "SUMX2MY2"
+            | "SUMX2PY2"
+            | "SUMXMY2"
+            | "CORREL"
+            | "COVAR"
+            | "COVARIANCE.P"
+            | "COVARIANCE.S"
+            | "PEARSON"
+            | "RSQ"
+            | "SLOPE"
+            | "INTERCEPT"
+            | "STEYX"
+            | "ROWS"
+            | "COLUMNS"
+            | "AREAS"
+            | "ROW"
+            | "COLUMN"
+            | "TRANSPOSE"
+            | "ISREF"
+            | "MMULT"
+            | "MINVERSE"
+            | "MDETERM"
+            | "FREQUENCY"
+            | "FILTER"
+            | "SORT"
+            | "SORTBY"
+            | "UNIQUE"
+            | "SEQUENCE"
+            | "RANDARRAY"
+            | "VSTACK"
+            | "HSTACK"
+            | "TOROW"
+            | "TOCOL"
+            | "WRAPROWS"
+            | "WRAPCOLS"
+            | "TAKE"
+            | "DROP"
+            | "CHOOSEROWS"
+            | "CHOOSECOLS"
+            | "EXPAND"
+            | "GROUPBY"
+            | "PIVOTBY"
+            | "T"
+    ) || match name {
+        "INDEX" => index == 0,
+        // These functions consume references rather than scalar values. Keep the reference node
+        // intact so they can inspect its area and, for CELL/FORMULATEXT, its identity.
+        "CELL" => index == 1,
+        "FORMULATEXT" | "ISFORMULA" => index == 0,
+        "OFFSET" | "SHEET" | "SHEETS" => index == 0,
+        "SUBTOTAL" => index > 0,
+        "AGGREGATE" => index > 1,
+        "WORKDAY" | "NETWORKDAYS" => index == 2,
+        "WORKDAY.INTL" | "NETWORKDAYS.INTL" => index == 3,
+        "PROB" => index < 2,
+        "IRR" | "MIRR" => index == 0,
+        "NPV" => index > 0,
+        "XIRR" => index < 2,
+        "XNPV" => index == 1 || index == 2,
+        "F.TEST" | "CHISQ.TEST" | "T.TEST" => index < 2,
+        "Z.TEST" | "PERCENTILE" | "PERCENTILE.INC" | "PERCENTILE.EXC" | "PERCENTRANK" | "PERCENTRANK.INC" | "PERCENTRANK.EXC" | "QUARTILE"
+        | "QUARTILE.INC" | "QUARTILE.EXC" | "LARGE" | "SMALL" | "TRIMMEAN" => index == 0,
+        "RANK" | "RANK.AVG" | "RANK.EQ" => index == 1,
+        "FORECAST" | "FORECAST.LINEAR" => index == 1 || index == 2,
+        "FORECAST.ETS" => index == 1 || index == 2,
+        "DCOUNT" | "DCOUNTA" | "DAVERAGE" | "DGET" | "DMAX" | "DMIN" | "DPRODUCT" | "DSTDEV" | "DSTDEVP" | "DSUM" | "DVAR" | "DVARP" => {
+            index == 0 || index == 2
+        }
+        "SUMIF" | "AVERAGEIF" => index == 0 || index == 2,
+        "COUNTIF" => index == 0,
+        "SUMIFS" | "AVERAGEIFS" | "MINIFS" | "MAXIFS" => index == 0 || index % 2 == 1,
+        "COUNTIFS" => index.is_multiple_of(2),
+        "VLOOKUP" | "HLOOKUP" => index == 1,
+        "MATCH" | "XMATCH" => index == 1,
+        "LOOKUP" => index > 0,
+        "XLOOKUP" => index == 1 || index == 2,
+        _ => false,
     }
 }
 
