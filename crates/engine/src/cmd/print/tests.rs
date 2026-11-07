@@ -585,10 +585,8 @@ fn libreoffice_corpus_pdf_reproducers_keep_sheet_content_and_objects() -> std::r
     let (pictures, _) = render(
         "office-openxml-sdk/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestDataStorage/O14ISOStrict/Excel/Photo Formats - CGM-O12-XL-Pictures.xlsx",
     )?;
-    assert!(
-        contains(&pictures, "/Subtype /Image") || contains(&pictures, "Picture preview unavailable"),
-        "pictures on non-active sheets should render or have an explicit unsupported-format placeholder"
-    );
+    assert!(contains(&pictures, " m\n"), "the embedded EMF pictures should render as PDF vector paths");
+    assert!(!contains(&pictures, "Picture preview unavailable"), "supported EMF pictures should not use the unsupported-format placeholder");
 
     let (controls, _) = render("office-libreoffice/sc/qa/unit/data/xlsx/tdf111980_radioButtons.xlsx")?;
     assert!(contains(&controls, "Embedded control preview unavailable"));
@@ -598,7 +596,8 @@ fn libreoffice_corpus_pdf_reproducers_keep_sheet_content_and_objects() -> std::r
 
     let (chart_sheet, chart_sheet_pages) = render("office-poi/spreadsheet/56557.xlsx")?;
     assert_eq!(chart_sheet_pages, 1);
-    assert!(contains(&chart_sheet, "Chart sheet preview unavailable"));
+    assert!(!contains(&chart_sheet, "Chart preview unavailable"), "a chart sheet with a readable chart part should render its plot");
+    assert!(contains(&chart_sheet, " m") || contains(&chart_sheet, " re f"), "chart sheet output should contain vector plot content");
 
     let (spreadsheet, _) = render("office-openxml-sdk/test/DocumentFormat.OpenXml.Tests.Assets/assets/TestFiles/Spreadsheet.xlsx")?;
     assert!(contains(&spreadsheet, "/Subtype /Image"));

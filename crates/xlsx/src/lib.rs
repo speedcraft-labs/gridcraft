@@ -55,6 +55,13 @@ pub use passthrough::rebase_links;
 pub use xls::read_xls;
 pub use xlsb::read_xlsb;
 
+/// Reads the editable chart subset from a standalone OOXML chart part.
+/// Used for chart sheets, which are preserved as package parts instead of worksheet models.
+pub fn read_chart_part(bytes: &[u8]) -> Option<gridcraft_model::Chart> {
+    let root = xml::parse(bytes).ok()?;
+    chart::read_chart(&root)
+}
+
 /// Errors from reading or writing files.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
