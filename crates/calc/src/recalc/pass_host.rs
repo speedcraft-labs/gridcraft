@@ -539,6 +539,7 @@ fn formula_uses_text(expr: &Expr) -> bool {
 pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
+        Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),
         Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection(x, array_context))),
         Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
@@ -554,6 +555,10 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
             let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
             Expr::Unary(UnOp::At, Box::new(call))
         }
+        Expr::Call(name, args) if !array_context && legacy_returns_array(name) => {
+            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            Expr::Unary(UnOp::At, Box::new(call))
+        }
         Expr::Call(name, args) => Expr::Call(
             name.clone(),
             args.iter()
@@ -564,6 +569,7 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
                         a,
                         Expr::Call(result, _)
                             if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
+                                || legacy_returns_array(result)
                     ) || matches!(a, Expr::Unary(UnOp::Spill, _));
                     let nested_array_context =
                         array_context || (name == "SUMPRODUCT" && consumes_range) || (consumes_range && returns_reference_or_array);
@@ -578,6 +584,36 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
         Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection(x, array_context))),
         _ => expr.clone(),
     }
+}
+
+fn legacy_returns_array(name: &str) -> bool {
+    matches!(
+        name,
+        "CHOOSECOLS"
+            | "CHOOSEROWS"
+            | "DROP"
+            | "EXPAND"
+            | "FILTER"
+            | "GROUPBY"
+            | "HSTACK"
+            | "MAKEARRAY"
+            | "MAP"
+            | "PIVOTBY"
+            | "RANDARRAY"
+            | "SCAN"
+            | "SEQUENCE"
+            | "SORT"
+            | "SORTBY"
+            | "TAKE"
+            | "TEXTSPLIT"
+            | "TOCOL"
+            | "TOROW"
+            | "TRANSPOSE"
+            | "UNIQUE"
+            | "VSTACK"
+            | "WRAPCOLS"
+            | "WRAPROWS"
+    )
 }
 
 fn legacy_array_arg(name: &str, index: usize) -> bool {
@@ -641,6 +677,7 @@ fn legacy_array_arg(name: &str, index: usize) -> bool {
             | "COLUMN"
             | "TRANSPOSE"
             | "ISREF"
+            | "TYPE"
             | "MMULT"
             | "MINVERSE"
             | "MDETERM"

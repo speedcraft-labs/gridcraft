@@ -1354,6 +1354,38 @@ fn imported_legacy_sum_keeps_reference_returning_ranges() {
 }
 
 #[test]
+fn imported_legacy_spill_and_dynamic_array_results_intersect() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3,1,4)");
+    for (at, formula) in [("D2", "=A1#"), ("E2", "=_xlfn.ANCHORARRAY((A1))")] {
+        let mut imported = Formula::new(formula);
+        imported.legacy = true;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(imported));
+    }
+    let mut unique = Formula::new("=UNIQUE(A1:A3)");
+    unique.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F2"), Cell::formula(unique));
+    let mut sum_unique = Formula::new("=SUM(UNIQUE(A1:A3))");
+    sum_unique.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("G2"), Cell::formula(sum_unique));
+    let mut type_spill = Formula::new("=TYPE(A1#)");
+    type_spill.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("I2"), Cell::formula(type_spill));
+    let mut outside = Formula::new("=A1#");
+    outside.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("H5"), Cell::formula(outside));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D2")), (0, c("E2")), (0, c("F2")), (0, c("G2")), (0, c("H5")), (0, c("I2"))]);
+
+    assert_eq!((t.num("D2"), t.num("E2"), t.num("F2")), (5.0, 5.0, 4.0));
+    assert_eq!(t.num("G2"), 15.0, "SUM still consumes the full UNIQUE result");
+    assert_eq!(t.num("I2"), 64.0, "TYPE sees the spill as an array");
+    assert_eq!(t.get("H5"), Value::Error(CellError::Value), "spill results outside the reference intersect as #VALUE!");
+    for at in ["D2", "E2", "F2", "G2", "H5", "I2"] {
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c(at)), "legacy {at} does not spill");
+    }
+}
+
+#[test]
 fn imported_legacy_formulas_preserve_range_functions_and_explicit_intersections() {
     // Range arguments and scalar results mirror cases in Apache POI's
     // FormulaEvalTestData_Copy.xlsx; CELL/SUBTOTAL and the explicit intersection use the same
