@@ -306,11 +306,8 @@ impl NumberFormat {
                 Some(render::render_general(sec, n.abs(), width))
             }
             SecKind::Date => {
-                if minus {
-                    None
-                } else {
-                    render::render_date(sec, n.abs(), sys)
-                }
+                let elapsed = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))));
+                if minus && !elapsed { None } else { render::render_date(sec, if minus { n } else { n.abs() }, sys) }
             }
             SecKind::Number => Some(render::render_number(sec, n.abs())),
         };

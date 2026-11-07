@@ -58,21 +58,44 @@ pub(crate) fn render_general(sec: &Section, v: f64, width: usize) -> Out {
     out
 }
 
-/// Renders a date/time. `None` when the serial is outside the supported range.
+/// Renders a date, time or elapsed duration. `None` when it is outside the supported range.
 pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out> {
-    if !v.is_finite() || !(0.0..max_serial(sys) as f64 + 1.0).contains(&v) {
+    if !v.is_finite() {
+        return None;
+    }
+    const DAY_MS: i64 = 86_400_000;
+    let needs_date = sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+    let elapsed_hours = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::ElapsedH(_))));
+    let elapsed_minutes = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::ElapsedM(_))));
+    let elapsed_seconds = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::ElapsedS(_))));
+    let has_elapsed = elapsed_hours || elapsed_minutes || elapsed_seconds;
+    let duration_only = has_elapsed && !needs_date;
+    if v < 0.0 && !duration_only {
+        return None;
+    }
+    let serial = v.abs();
+    if !duration_only && serial >= max_serial(sys) as f64 + 1.0 {
         return None;
     }
     let sub_digits = sec.toks.iter().filter_map(|t| if let Tok::Date(DatePart::SubSec(n)) = t { Some(*n) } else { None }).max().unwrap_or(0).min(3);
     let unit: i64 = 10i64.pow(3 - sub_digits as u32);
-    let mut day = v.floor() as i64;
-    let mut ms = (((v - v.floor()) * 86_400_000.0) / unit as f64).round() as i64 * unit;
-    if ms >= 86_400_000 {
-        ms -= 86_400_000;
-        day += 1;
-    }
-    let total_ms = day.saturating_mul(86_400_000).saturating_add(ms);
-    let needs_date = sec.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+    let (day, ms, total_ms) = if duration_only {
+        let raw_units = (serial * DAY_MS as f64 / unit as f64).round();
+        if !raw_units.is_finite() || raw_units >= i64::MAX as f64 {
+            return None;
+        }
+        let total_ms = (raw_units as i64).checked_mul(unit)?;
+        (total_ms / DAY_MS, total_ms % DAY_MS, total_ms)
+    } else {
+        let mut day = serial.floor() as i64;
+        let mut ms = (((serial - serial.floor()) * DAY_MS as f64) / unit as f64).round() as i64 * unit;
+        if ms >= DAY_MS {
+            ms -= DAY_MS;
+            day += 1;
+        }
+        let total_ms = day.saturating_mul(DAY_MS).saturating_add(ms);
+        (day, ms, total_ms)
+    };
     let dt = if needs_date { datetime_from_serial(sys, day as f64)? } else { datetime_from_serial(sys, 0.0).unwrap_or_default() };
     let ampm = sec.toks.iter().any(|t| matches!(t, Tok::Date(DatePart::AmPm | DatePart::AP(..))));
     let hour = ms / 3_600_000;
@@ -109,13 +132,15 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                         let h = if ampm {
                             let h = hour % 12;
                             if h == 0 { 12 } else { h }
+                        } else if duration_only && elapsed_hours {
+                            total_ms / 3_600_000
                         } else {
                             hour
                         };
                         pad(h, n)
                     }
-                    DatePart::Minute(n) => pad(minute, n),
-                    DatePart::Second(n) => pad(second, n),
+                    DatePart::Minute(n) => pad(if duration_only && elapsed_minutes { total_ms / 60_000 } else { minute }, n),
+                    DatePart::Second(n) => pad(if duration_only && elapsed_seconds { total_ms / 1000 } else { second }, n),
                     DatePart::SubSec(n) => {
                         let mut s = format!(".{:03}", milli);
                         s.truncate(1 + (n as usize).min(3));
@@ -136,6 +161,7 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
             other => out.push(&other.literal_text()),
         }
     }
+    out.zero = total_ms == 0;
     Some(out)
 }
 
