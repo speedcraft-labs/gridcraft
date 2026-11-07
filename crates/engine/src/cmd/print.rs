@@ -168,7 +168,13 @@ fn render_pdf_with_options(wb: &Workbook, layouts: &[SheetLayout], file: &str, p
         let pg = doc.add_page(612.0, 792.0);
         pg.rect_stroke(36.0, 36.0, 540.0, 720.0, 0.75, [0xA0, 0xA0, 0xA0]);
         pg.text(48.0, 72.0, 16.0, Font::HelveticaBold, [0x20, 0x20, 0x20], &sheet.name);
-        pg.text(48.0, 96.0, 10.0, Font::Helvetica, [0x50, 0x50, 0x50], "Chart sheet preview unavailable");
+        if let Some(chart) = chart_sheet_chart(wb, sheet) {
+            let data = gridcraft_chart::resolve(wb, 0, &chart);
+            let prims = gridcraft_chart::render(&chart, &data, 516.0, 680.0, &draw::PdfMeasure);
+            draw::draw_prims(pg, &prims, draw::Xf { ox: 48.0, oy: 96.0, k: 1.0 });
+        } else {
+            pg.text(48.0, 96.0, 10.0, Font::Helvetica, [0x50, 0x50, 0x50], "Chart preview unavailable");
+        }
     }
     for link in pending_links {
         if let Some((target_page, x, y)) = printed_target(wb, &printed_blocks, link.sheet, &link.target)
@@ -180,6 +186,22 @@ fn render_pdf_with_options(wb: &Workbook, layouts: &[SheetLayout], file: &str, p
     }
     let n = doc.page_count();
     (doc.finish(), n)
+}
+
+/// Gets a preserved chart sheet's chart part and parses its editable chart subset.
+/// Chart sheets intentionally stay outside the worksheet model, but their OOXML parts are kept.
+fn chart_sheet_chart(wb: &Workbook, sheet: &gridcraft_model::PreservedSheet) -> Option<gridcraft_model::Chart> {
+    let preserved = wb.preserved.as_ref()?;
+    fn part<'a>(preserved: &'a gridcraft_model::Preserved, name: &str) -> Option<&'a gridcraft_model::PreservedPart> {
+        preserved.parts.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+    }
+    let sheet_rel = preserved.rels.iter().find(|r| r.id == sheet.rel_id && !r.external)?;
+    let sheet_part = part(preserved, &sheet_rel.target)?;
+    let drawing_rel = sheet_part.rels.iter().find(|r| !r.external && r.rel_type.ends_with("/drawing"))?;
+    let drawing_part = part(preserved, &drawing_rel.target)?;
+    let chart_rel = drawing_part.rels.iter().find(|r| !r.external && r.rel_type.ends_with("/chart"))?;
+    let chart_part = part(preserved, &chart_rel.target)?;
+    gridcraft_xlsx::read_chart_part(&chart_part.data)
 }
 
 // ---------------------------------------------------------------- commands

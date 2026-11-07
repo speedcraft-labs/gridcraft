@@ -10,3 +10,4 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+craft-metafile = { workspace = true }

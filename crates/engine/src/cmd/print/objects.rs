@@ -86,6 +86,12 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let (x, y, w, h) = place(r);
+        if craft_metafile::is_metafile(&im.data) {
+            if !pg.metafile(&im.data, Rect::new(x, y, w, h)) {
+                draw_object_placeholder(pg, (x, y, w, h), "Picture preview unavailable", b.k);
+            }
+            continue;
+        }
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
         let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));

@@ -665,6 +665,86 @@ impl Page {
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
         self.op(&s);
     }
+
+    /// Draws an EMF or WMF picture from the shared bounded metafile reader.
+    /// Returns false when the payload is not a usable metafile.
+    pub fn metafile(&mut self, bytes: &[u8], destination: Rect) -> bool {
+        let Ok(picture) = craft_metafile::parse(bytes) else { return false };
+        if !picture.width.is_finite()
+            || !picture.height.is_finite()
+            || picture.width <= 0.0
+            || picture.height <= 0.0
+            || !finite(&[destination.x, destination.y, destination.width, destination.height])
+            || destination.width <= 0.0
+            || destination.height <= 0.0
+        {
+            return false;
+        }
+        let sx = destination.width / picture.width;
+        let sy = destination.height / picture.height;
+        let xy = |x: f32, y: f32| (destination.x + x * sx, destination.y + y * sy);
+        self.save();
+        self.clip_rect(destination.x, destination.y, destination.width, destination.height);
+        for item in &picture.items {
+            match item {
+                craft_metafile::Item::Path { segs, fill, stroke, even_odd, .. } => {
+                    if segs.is_empty() {
+                        continue;
+                    }
+                    let mut s = String::new();
+                    if let Some(c) = fill {
+                        s.push_str(&format!("{}\n", rgb_op([c[0], c[1], c[2]], false)));
+                    }
+                    if let Some((c, width)) = stroke {
+                        s.push_str(&format!("{}\n{} w\n", rgb_op([c[0], c[1], c[2]], true), n((width * sx.min(sy)).max(0.25))));
+                    }
+                    for seg in segs {
+                        use craft_metafile::Seg;
+                        match *seg {
+                            Seg::Move(x, y) => {
+                                let (x, y) = xy(x, y);
+                                s.push_str(&format!("{} {} m\n", n(x), n(self.y(y))));
+                            }
+                            Seg::Line(x, y) => {
+                                let (x, y) = xy(x, y);
+                                s.push_str(&format!("{} {} l\n", n(x), n(self.y(y))));
+                            }
+                            Seg::Cubic(x1, y1, x2, y2, x3, y3) => {
+                                let (x1, y1) = xy(x1, y1);
+                                let (x2, y2) = xy(x2, y2);
+                                let (x3, y3) = xy(x3, y3);
+                                s.push_str(&format!("{} {} {} {} {} {} c\n", n(x1), n(self.y(y1)), n(x2), n(self.y(y2)), n(x3), n(self.y(y3))));
+                            }
+                            Seg::Close => s.push_str("h\n"),
+                        }
+                    }
+                    match (fill.is_some(), stroke.is_some(), *even_odd) {
+                        (true, true, true) => s.push_str("B*\n"),
+                        (true, true, false) => s.push_str("B\n"),
+                        (true, false, true) => s.push_str("f*\n"),
+                        (true, false, false) => s.push_str("f\n"),
+                        (false, true, _) => s.push_str("S\n"),
+                        _ => continue,
+                    }
+                    self.op(&s);
+                }
+                craft_metafile::Item::Bitmap { rect: [x, y, w, h], width, height, rgba, .. } => {
+                    let (x, y) = xy(*x, *y);
+                    self.image_rgba(Rect::new(x, y, *w * sx, *h * sy), rgba, [*width, *height]);
+                }
+                craft_metafile::Item::Text(t) => {
+                    let [a, b, c, d, e, f] = t.transform;
+                    let (x, y) = xy(e as f32, f as f32);
+                    let size = (t.font.height.abs() * sx.min(sy)).max(1.0);
+                    let _ = (a, b, c, d);
+                    self.text(x, y + size, size, Font::Helvetica, [t.color[0], t.color[1], t.color[2]], &t.text);
+                }
+                craft_metafile::Item::Pattern { .. } => {}
+            }
+        }
+        self.restore();
+        true
+    }
 }
 
 /// Document metadata.

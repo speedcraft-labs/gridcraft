@@ -24,6 +24,7 @@ gridcraft-xlsx = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
+craft-metafile = { workspace = true }
 image = { workspace = true }
 sha2 = { workspace = true }
 
