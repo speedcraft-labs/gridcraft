@@ -429,6 +429,14 @@ fn t_chi_f() {
 }
 
 #[test]
+fn chi_square_inverse_retains_precision_used_by_round() {
+    let quantile = ev("CHISQ.INV.RT", vec![n(0.13333333333333333), n(5.0)]).as_f64().unwrap();
+    assert_eq!(crate::util::round_half_away(quantile, 12), 8.445480112857, "quantile={quantile:.17}");
+    let confidence = ev("CONFIDENCE.T", vec![n(0.13333333333333333), n(6.6), n(44.0)]).as_f64().unwrap();
+    assert_eq!(crate::util::round_half_away(confidence, 12), 1.522361125119, "confidence={confidence:.17}");
+}
+
+#[test]
 fn f_distributions_accept_ten_billion_degrees() {
     close_tol(ev("F.DIST", vec![n(0.0), n(10_000_000_000.0), n(1.0), b(false)]), 0.0, 0.0);
     close_tol(ev("F.DIST.RT", vec![n(0.0), n(1.0), n(10_000_000_000.0)]), 1.0, 0.0);
