@@ -291,7 +291,10 @@ fn convert(args: &[String]) -> Result<(), String> {
     let mut s = open(input)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
-        let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
+        // Converting a workbook follows document-converter convention and prints every visible
+        // sheet. A named --sheet is an explicit request to print just that sheet.
+        let sheets = if a.opt("sheet").is_some() { "active" } else { "all" };
+        let result = exec(&mut s, "file.exportPdf", json!({"path": out, "sheets": sheets}))?;
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
         return Ok(());
     }
@@ -653,6 +656,32 @@ mod tests {
         let pdf = std::fs::read(&output).unwrap();
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(pdf.windows(b"/URI (https://example.org)".len()).any(|w| w == b"/URI (https://example.org)"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn convert_xlsx_to_pdf_prints_all_sheets_unless_one_is_named() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-cli-all-sheets-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("two-sheets.xlsx");
+        let output = dir.join("all.pdf");
+        let mut s = blank();
+        s.execute("cell.set", json!({"cell": "A1", "input": "First sheet"})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Second"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "Second sheet"})).unwrap();
+        let bytes = gridcraft_engine::io::save_file_bytes(&s.doc().unwrap().wb, input.to_str().unwrap()).unwrap();
+        gridcraft_engine::io::write_file(input.to_str().unwrap(), &bytes).unwrap();
+
+        convert(&[input.to_string_lossy().into_owned(), output.to_string_lossy().into_owned()]).unwrap();
+        let all = std::fs::read(&output).unwrap();
+        assert!(all.windows(b"(First sheet) Tj".len()).any(|w| w == b"(First sheet) Tj"));
+        assert!(all.windows(b"(Second sheet) Tj".len()).any(|w| w == b"(Second sheet) Tj"));
+
+        let selected = dir.join("selected.pdf");
+        convert(&[input.to_string_lossy().into_owned(), selected.to_string_lossy().into_owned(), "--sheet".into(), "Second".into()]).unwrap();
+        let one = std::fs::read(&selected).unwrap();
+        assert!(!one.windows(b"(First sheet) Tj".len()).any(|w| w == b"(First sheet) Tj"));
+        assert!(one.windows(b"(Second sheet) Tj".len()).any(|w| w == b"(Second sheet) Tj"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

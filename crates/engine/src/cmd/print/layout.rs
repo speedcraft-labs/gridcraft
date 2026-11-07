@@ -145,6 +145,12 @@ pub fn print_range(sh: &Sheet) -> Option<RangeRef> {
     for s in &sh.shapes {
         grow(&s.anchor);
     }
+    for c in sh.controls.iter().filter(|c| c.print) {
+        grow(&c.anchor);
+    }
+    if sh.preserved.as_ref().is_some_and(|p| p.elements.iter().any(|e| matches!(e.slot.as_str(), "controls" | "oleObjects"))) {
+        r.get_or_insert_with(|| RangeRef::cell(CellRef::new(0, 0)));
+    }
     // Printing starts at A1 like Excel when the data starts nearby? Excel prints from the first
     // used cell; keep the used range as is.
     r
@@ -358,7 +364,8 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
             out.push(l);
         }
     }
-    if out.is_empty() && opts.all_sheets {
+    let has_chart_sheet = wb.preserved.as_ref().is_some_and(|p| p.sheets.iter().any(|s| s.visibility == Visibility::Visible));
+    if out.is_empty() && opts.all_sheets && !has_chart_sheet {
         out.extend(layout_sheet(wb, wb.active_sheet(), opts, None));
     }
     out
