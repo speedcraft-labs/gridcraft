@@ -36,7 +36,7 @@ fn source() -> Vec<u8> {
         ));
     }
     // The same SUMPRODUCT saved by legacy Excel: no `cm`.
-    rows.push_str(r#"<row r="6"><c r="D6"><f>SUMPRODUCT(B1:B3*C1:C3)</f><v>20</v></c></row>"#);
+    rows.push_str(r#"<row r="6"><c r="D6"><f>SUMPRODUCT(B1:B3*C1:C3)</f><v>20</v></c></row><row r="7"><c r="D7"><f>A:A&amp;"/"&amp;B:B</f><v>cached</v></c></row>"#);
     super::minimal(&format!("<sheetData>{rows}</sheetData>"), &[("xl/metadata.xml", METADATA)], METADATA_REL, "")
 }
 
@@ -61,6 +61,9 @@ fn assert_written_dynamic(bytes: &[u8]) {
     let legacy = cell(&sheet, "D6");
     assert_eq!(legacy.attr("cm"), None, "a legacy formula must not become dynamic");
     assert_eq!(legacy.child("f").unwrap().attr("t"), None);
+    let imported_legacy = cell(&sheet, "D7");
+    assert_eq!(imported_legacy.attr("cm"), None, "a legacy formula must not become dynamic");
+    assert_eq!(imported_legacy.child("f").unwrap().attr("t"), None);
 
     let metadata = pkg.read_xml("xl/metadata.xml").unwrap().expect("metadata part written");
     assert_eq!(metadata.path(&["metadataTypes", "metadataType"]).unwrap().attr("name"), Some("XLDAPR"));
@@ -83,6 +86,8 @@ fn dynamic_array_metadata_is_read_onto_formulas() {
         assert_eq!(f.array, None, "{address} is not a legacy CSE array");
     }
     assert!(!sh.cell(at("D6")).unwrap().formula.as_ref().unwrap().dynamic);
+    assert!(sh.cell(at("D6")).unwrap().formula.as_ref().unwrap().legacy);
+    assert!(sh.cell(at("D7")).unwrap().formula.as_ref().unwrap().legacy);
 }
 
 #[test]

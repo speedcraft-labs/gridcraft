@@ -182,10 +182,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                     moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
                     moved.dynamic = f.dynamic;
+                    moved.legacy = f.legacy;
                     return Some(std::sync::Arc::new(moved));
                 }
                 let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, legacy: f.legacy, ..Formula::from_expr(moved) }))
             };
             // A Python cell's code travels with it. Cut to another sheet, it keeps reading the
             // cells its `xl()` references named on its original sheet, as a moved formula does:
@@ -380,6 +381,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
                 let mut nf = Formula::from_expr(new);
                 nf.array = array;
                 nf.dynamic = f.dynamic;
+                nf.legacy = f.legacy;
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
         }

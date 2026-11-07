@@ -463,6 +463,7 @@ impl SheetState<'_> {
                     self.unsupported("syntax GridCraft can't parse yet");
                     return;
                 }
+                f.legacy = array.is_none();
                 f.array = array.filter(|r| !r.is_single());
                 if let Some(cell) = self.sheet.cells.get_mut(pos) {
                     cell.formula = Some(Arc::new(f));

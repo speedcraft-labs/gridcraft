@@ -648,7 +648,8 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             let ex = extra.get(&cell_ref);
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
                 let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(workbook, index, cell_ref, f)).then_some(RangeRef::cell(cell_ref))
+                (f.array.is_none() && !f.legacy && crate::array_formula::needs_array(workbook, index, cell_ref, f))
+                    .then_some(RangeRef::cell(cell_ref))
             });
             write_cell(
                 s,
@@ -781,7 +782,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
     };
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
     // not need it: Excel decided the formula is evaluated as an array.
-    let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
+    let own = formula.filter(|f| f.dynamic && !f.legacy && f.array.is_none()).map(|_| RangeRef::cell(c));
     let dynamic = dynamic.or(own.as_ref());
     // A non-spilling formula may still need array evaluation to avoid implicit intersection.
     if dynamic.is_some() && (formula.is_some_and(|f| f.array.is_none()) || py_text.is_some()) {

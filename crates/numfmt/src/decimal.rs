@@ -195,6 +195,46 @@ pub fn format_general_fit(n: f64, max_chars: usize) -> Option<String> {
     None
 }
 
+/// Excel's `TEXT(value, "General")` conversion. It keeps 11 significant digits and allows a
+/// negative sign an extra character; unlike cell display, it uses fixed notation through 1E-9.
+pub fn format_general_text(n: f64) -> Option<String> {
+    if !n.is_finite() {
+        return None;
+    }
+    if n == 0.0 {
+        return Some("0".into());
+    }
+    let max_chars = 11 + usize::from(n < 0.0);
+    let (digits, exp) = decimal_digits(n.abs());
+    if exp >= -9 {
+        let int_len = exp.max(0) as usize + 1;
+        let mut decimals = max_chars.saturating_sub(usize::from(n < 0.0) + int_len + 1);
+        loop {
+            let (integer, fraction) = fixed_from_digits(&digits, exp, decimals);
+            let fraction = fraction.trim_end_matches('0');
+            if !integer.is_empty() || !fraction.is_empty() {
+                let mut out = String::new();
+                if n < 0.0 {
+                    out.push('-');
+                }
+                out.push_str(if integer.is_empty() { "0" } else { &integer });
+                if !fraction.is_empty() {
+                    out.push('.');
+                    out.push_str(fraction);
+                }
+                if out.len() <= max_chars {
+                    return Some(out);
+                }
+            }
+            if decimals == 0 {
+                break;
+            }
+            decimals -= 1;
+        }
+    }
+    format_general_fit(n, max_chars)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +275,14 @@ mod tests {
         assert_eq!(format_general_fit(9.99999999999, 5).as_deref(), Some("10"));
         assert_eq!(format_general_fit(f64::NAN, 11), None);
         assert_eq!(format_general_fit(1.7976931348623157e308, 11).as_deref(), Some("1.7977E+308"));
+    }
+
+    #[test]
+    fn general_text_has_no_cell_width_limit() {
+        assert_eq!(format_general_text(1e-9).as_deref(), Some("0.000000001"));
+        assert_eq!(format_general_text(-1e-9).as_deref(), Some("-0.000000001"));
+        assert_eq!(format_general_text(-11_234_500_000.0).as_deref(), Some("-11234500000"));
+        assert_eq!(format_general_text(1e-10).as_deref(), Some("1E-10"));
+        assert_eq!(format_general_text(112_345_000_000.0).as_deref(), Some("1.12345E+11"));
     }
 }
