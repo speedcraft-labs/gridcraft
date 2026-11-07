@@ -1224,6 +1224,129 @@ fn legacy_array_formulas_fill_their_range() {
 }
 
 #[test]
+fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
+    let mut t = T::new();
+    t.set("A3", "north");
+    t.set("B3", "south");
+    // Mirrors Data_sheet!C12 in office-poi's 0-www-crossref...suffix-generator.xlsm.
+    let mut formula = Formula::new("=A:A&\"/\"&B:B");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D3"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D3"))]);
+    assert_eq!(t.get("D3"), Value::from("north/south"));
+    assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c("D3")));
+
+    // A formula typed in GridCraft remains a dynamic array, even with the same source text.
+    t.set("E1", "=A:A&\"/\"&B:B");
+    assert_eq!(t.get("E3"), Value::from("north/south"));
+    assert!(t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c("E1")));
+
+    // FormulaEvalTestData_Copy.xlsx EverythingTests!N1180: the row of the range intersects the
+    // legacy formula's column, even though the formula is hundreds of rows below the source.
+    t.set("M9", "1");
+    t.set("N9", "2.5");
+    t.set("O9", "3");
+    t.set("K10", "0");
+    let mut formula = Formula::new("=ROUND(M9:O9,K10)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("N1180"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("N1180"))]);
+    assert_eq!(t.get("N1180"), Value::Number(3.0));
+}
+
+#[test]
+fn imported_legacy_formulas_preserve_range_functions_and_explicit_intersections() {
+    // Range arguments and scalar results mirror cases in Apache POI's
+    // FormulaEvalTestData_Copy.xlsx; CELL/SUBTOTAL and the explicit intersection use the same
+    // reference shapes as the Office cached-value corpus.
+    let mut t = T::new();
+    for (at, value) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("D3", "4")] {
+        t.set(at, value);
+    }
+
+    let mut subtotal = Formula::new("=SUBTOTAL(9,A1:A3)");
+    subtotal.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E3"), Cell::formula(subtotal));
+
+    let mut cell_width = Formula::new("=CELL(\"width\",A:A)");
+    cell_width.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F3"), Cell::formula(cell_width));
+
+    let mut intersection = Formula::new("=(C2:D3 D3:E4)");
+    intersection.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("G3"), Cell::formula(intersection));
+
+    t.set("C2", "=DATE(2021,1,4)");
+    t.set("D2", "=DATE(2021,1,5)");
+    t.set("H1", "=DATE(2021,1,8)");
+    let mut workday = Formula::new("=WORKDAY(C2,3,D2:D5)");
+    workday.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("H3"), Cell::formula(workday));
+    let mut median = Formula::new("=MEDIAN(A1:A3)");
+    median.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("I3"), Cell::formula(median));
+
+    let mut column = Formula::new("=COLUMN(B11:D11)");
+    column.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("J252"), Cell::formula(column));
+    let mut row = Formula::new("=ROW(C11:C14)");
+    row.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("K1192"), Cell::formula(row));
+    let mut index = Formula::new("=INDEX(B14:C15,D7,2)");
+    index.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("M736"), Cell::formula(index));
+    let mut npv = Formula::new("=NPV(0%,A1:A3)");
+    npv.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("N3"), Cell::formula(npv));
+    let mut t_fn = Formula::new("=T(A1:C1)");
+    t_fn.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("O1"), Cell::formula(t_fn));
+
+    t.calc.cells_changed(
+        &mut t.wb,
+        &[
+            (0, c("E3")),
+            (0, c("F3")),
+            (0, c("G3")),
+            (0, c("H3")),
+            (0, c("I3")),
+            (0, c("J252")),
+            (0, c("K1192")),
+            (0, c("M736")),
+            (0, c("N3")),
+            (0, c("O1")),
+        ],
+    );
+    assert_eq!(t.get("E3"), Value::Number(6.0), "SUBTOTAL reads the whole range");
+    assert_eq!(t.get("F3"), Value::Number(8.0), "CELL keeps a reference for column metadata");
+    assert_eq!(t.get("G3"), Value::Number(4.0), "an explicit intersection keeps its reference operands");
+    assert_eq!(t.get("H3"), t.get("H1"), "WORKDAY reads the full holiday range");
+    assert_eq!(t.get("I3"), Value::Number(2.0), "MEDIAN reads every number in its range");
+    assert_eq!(t.get("J252"), Value::Number(2.0), "COLUMN uses the first column of its range");
+    assert_eq!(t.get("K1192"), Value::Number(11.0), "ROW uses the first row of its range");
+    assert_eq!(t.get("M736"), Value::Error(CellError::Value), "INDEX does not spill an un-intersectable range");
+    assert_eq!(t.get("N3"), Value::Number(6.0), "NPV consumes its range argument");
+    assert_eq!(t.get("O1"), Value::from(""), "T consumes its range and returns scalar text");
+    for at in ["E3", "F3", "G3", "H3", "I3", "J252", "K1192", "M736", "N3", "O1"] {
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c(at)), "legacy {at} does not spill");
+    }
+}
+
+#[test]
+fn imported_legacy_ets_confint_keeps_its_value_and_timeline_ranges() {
+    let mut t = T::new();
+    for i in 0..12 {
+        t.set(&format!("A{}", i + 1), &(i + 1).to_string());
+        t.set(&format!("B{}", i + 1), &(10 + i).to_string());
+    }
+    let mut formula = Formula::new("=FORECAST.ETS.CONFINT(13,B1:B12,A1:A12,0.95,1,1)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D1"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("D1"))]);
+    assert!(matches!(t.get("D1"), Value::Number(_)), "range arguments must not be implicitly intersected");
+}
+
+#[test]
 fn array_broadcast_result_is_capped() {
     // A full column against a full row broadcasts to 1048576 x 16384 (17 billion cells, about
     // 400 GB): each operand is within its own cap, so only the product check stops the abort.

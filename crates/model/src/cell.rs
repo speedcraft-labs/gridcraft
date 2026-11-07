@@ -24,6 +24,10 @@ pub struct Formula {
     /// rewritten in GridCraft start without it, and the writer decides from their shape.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dynamic: bool,
+    /// Imported from a workbook without dynamic-array metadata. Legacy formulas implicitly
+    /// intersect array-shaped reference expressions instead of spilling them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy: bool,
 }
 
 impl Formula {
@@ -32,12 +36,12 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false },
+            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false },
+            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false, legacy: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false }
+        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false, legacy: false }
     }
     /// The parsed expression, re-parsing after deserialization.
     pub fn expr(&self) -> Option<Expr> {

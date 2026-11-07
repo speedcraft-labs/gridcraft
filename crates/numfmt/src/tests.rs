@@ -399,6 +399,8 @@ fn text_fn() {
     assert_eq!(text_function(&Value::Error(CellError::NA), "0", S), Err(CellError::NA));
     assert_eq!(text_function(&Value::Number(46302.0), "yyyy", S), Ok("2026".into()));
     assert_eq!(text_function(&Value::Number(0.5), "General", S), Ok("0.5".into()));
+    assert_eq!(text_function(&Value::Number(1e-9), "General", S), Ok("0.000000001".into()));
+    assert_eq!(text_function(&Value::Number(-112345000000.0), "General", S), Ok("-1.12345E+11".into()));
     assert_eq!(text_function(&Value::Number(1.0 / 3.0), "0.000", S), Ok("0.333".into()));
     assert_eq!(text_function(&Value::Empty, "0.00", S), Ok("0.00".into()));
     assert_eq!(text_function(&Value::Number(5.0), "", S), Ok("".into()));
@@ -422,6 +424,28 @@ fn text_fn() {
     ];
     for &(b, code, want) in cases {
         assert_eq!(text_function(&Value::Bool(b), code, S), Ok(want.into()), "{code} with {b}");
+    }
+}
+
+#[test]
+fn general_text_matches_excel_for_negative_precision_and_scientific_values() {
+    // Copied from Excel for Mac's cached results in GeneralFormatTests.xlsx.
+    let cases: &[(f64, &str)] = &[
+        (-1.234_567_89, "-1.23456789"),
+        (-1.234567891, "-1.234567891"),
+        (-1.2345678912, "-1.234567891"),
+        (-1.2345678919, "-1.234567892"),
+        (-1e10, "-10000000000"),
+        (-1.12345e11, "-1.12345E+11"),
+        (-1.123451e11, "-1.12345E+11"),
+        (-1.123459e11, "-1.12346E+11"),
+        (1e-9, "0.000000001"),
+        (-1e-9, "-0.000000001"),
+        (1e-10, "1E-10"),
+        (-1e-10, "-1E-10"),
+    ];
+    for &(number, expected) in cases {
+        assert_eq!(text_function(&Value::Number(number), "General", S), Ok(expected.into()), "TEXT({number}, General)");
     }
 }
 
@@ -672,6 +696,9 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     };
     if !n.is_finite() {
         return Err(CellError::Num);
+    }
+    if fmt.is_general() {
+        return crate::format_general_text(n).ok_or(CellError::Num);
     }
     let (f, overflow) = fmt.format_number(n, sys);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }

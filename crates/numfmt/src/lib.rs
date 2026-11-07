@@ -14,6 +14,7 @@ use gridcraft_core::{CellError, DateSystem, Value};
 
 pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
+pub use decimal::format_general_text;
 
 use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
@@ -446,6 +447,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     };
     if !n.is_finite() {
         return Err(CellError::Num);
+    }
+    if fmt.is_general() {
+        return format_general_text(n).ok_or(CellError::Num);
     }
     let (f, overflow) = fmt.format_number(n, sys);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
