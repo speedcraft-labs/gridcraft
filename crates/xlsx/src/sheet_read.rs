@@ -626,7 +626,15 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     // Keep the file's dynamic-array mark, so saving never turns the formula into a legacy one.
     let legacy = !dynamic && f.attr("t") != Some("array");
-    read_formula_text(cx, st, f, pos, dynamic).map(|fm| Formula { dynamic, legacy, ..fm })
+    read_formula_text(cx, st, f, pos, dynamic).map(|mut fm| {
+        let source = f.text.trim();
+        // A Google Sheets wrapper is removed from the model because GridCraft can evaluate its
+        // inner formula. Keep the original spelling only when it still describes that formula.
+        if !source.is_empty() && !source.to_ascii_uppercase().contains("DUMMYFUNCTION") {
+            fm.source_text = Some(source.to_string());
+        }
+        Formula { dynamic, legacy, ..fm }
+    })
 }
 
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

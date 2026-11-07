@@ -315,6 +315,26 @@ fn file_load_keeps_cached_results_for_external_cube_formulas() {
     assert_eq!(t.get("C1"), Value::Error(CellError::NA));
 }
 
+#[test]
+fn file_load_keeps_cached_results_for_formula_text() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let mut source = Formula::new("=1+2");
+    source.source_text = Some("1 + 2".into());
+    t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), Cell { formula: Some(Arc::new(source)), ..Cell::default() });
+
+    let formula_text = Formula::new("=FORMULATEXT(A1)");
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), Cell { value: Value::from("=1 + 2"), formula: Some(Arc::new(formula_text)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::from("=1 + 2"));
+
+    // An explicit recalc uses the source formula spelling rather than trusting its prior cache.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::from("=1 + 2"));
+}
+
 impl T {
     fn iterative(max_iterations: u32, max_change: f64) -> T {
         let mut t = T::new();

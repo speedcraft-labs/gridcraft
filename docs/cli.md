@@ -82,6 +82,10 @@ Imported legacy CUBE formulas retain their cached values during file-load calcul
 connection to evaluate them. `check` follows this file-load path, so these cells are compared against the producer's
 cache while new or edited CUBE formulas still return `#N/A` without a connection.
 
+Formulas using `FORMULATEXT`, and formulas that depend on them, also retain their cached results on file load. Their
+text depends on the producer's original formula spelling, including spaces and Excel's `@` and spill operators. GridCraft
+keeps that source spelling for display and writes it back unchanged; new or edited formulas recalculate normally.
+
 A logical result the producer cached as the number 1 or 0, without `t="b"` (Business Central's "Open in Excel"
 exports write `<c><f>TRUE()</f><v>1</v></c>`), holds the same value: it matches GridCraft's TRUE or FALSE and is also
 counted as *booleans saved as 1/0* (`boolAsNumber`). Excel types logical results, so on files it saved this count
