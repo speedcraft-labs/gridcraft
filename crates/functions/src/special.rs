@@ -30,15 +30,23 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
         let s = (PI * x).sin().abs();
         return (PI / s).ln() - ln_gamma(1.0 - x);
     }
-    if x < 15.0 && x == x.floor() {
-        // Exact for small integers.
-        let mut f = 1.0f64;
-        let mut i = 2.0;
-        while i < x {
-            f *= i;
-            i += 1.0;
+    if x <= 64.0 && x == x.floor() {
+        // For small integer arguments, summing log(k) is more accurate than the Lanczos
+        // approximation and avoids rounding a factorial before taking its logarithm.
+        let mut sum = 0.0;
+        for i in 2..x as u32 {
+            sum += f64::from(i).ln();
         }
-        return f.ln();
+        return sum;
+    }
+    if (0.5..=256.0).contains(&x) && (x - 0.5).fract() == 0.0 {
+        // Half-integer values recur from Γ(1/2)=√π. This avoids the few ulps of Lanczos error
+        // that can cross a decimal rounding boundary in inverse chi-square results.
+        let mut sum = 0.5 * PI.ln();
+        for i in 0..(x - 0.5) as usize {
+            sum += (i as f64 + 0.5).ln();
+        }
+        return sum;
     }
     let x = x - 1.0;
     let mut a = LANCZOS[0];
@@ -101,6 +109,18 @@ pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
     }
     if x.is_infinite() {
         return 0.0;
+    }
+    if a > 0.5 && a <= 256.0 && (a - 0.5).fract() == 0.0 {
+        // For half-integer shapes, recur upward from Q(1/2,x)=erfc(√x). This avoids the
+        // cancellation and accumulated error of a continued fraction at the common chi-square
+        // degrees of freedom used with CHISQ.INV.RT.
+        let mut shape = 0.5;
+        let mut q = reg_gamma_q(shape, x);
+        while shape < a {
+            q += (-x + shape * x.ln() - ln_gamma(shape + 1.0)).exp();
+            shape += 1.0;
+        }
+        return q.clamp(0.0, 1.0);
     }
     if x < a + 1.0 { 1.0 - gamma_series(a, x) } else { gamma_cf(a, x) }
 }
@@ -337,16 +357,10 @@ pub(crate) fn invert(f: impl Fn(f64) -> f64, target: f64, lo: f64, hi: f64, hi_m
             break;
         }
         let fm = f(mid) - target;
-        if fm == 0.0 {
-            return mid;
-        }
         if (fm < 0.0) == lo_neg {
             lo = mid;
         } else {
             hi = mid;
-        }
-        if (hi - lo).abs() <= 1e-15 * mid.abs().max(1e-300) {
-            break;
         }
     }
     0.5 * (lo + hi)

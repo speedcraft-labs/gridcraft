@@ -357,6 +357,21 @@ impl PassHost<'_> {
             self.taint = outer_taint;
             return Value::Error(CellError::Calc);
         }
+        let unavailable_reference = matches!(&v, Value::Error(CellError::Ref));
+        let unavailable_name = matches!(&v, Value::Error(CellError::Name)) && formula_uses_unresolved_name(self.wb, k.0, &expr);
+        let v = if self.preserve_imported_formula_cache
+            && legacy_formula
+            && (unavailable_reference || unavailable_name)
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && !matches!(&cell.value, Value::Empty)
+        {
+            // A workbook can retain a cached result after a linked sheet, workbook or defined
+            // name becomes unavailable. Keep it during initial load; later recalculation uses
+            // the evaluator and reports the unresolved reference or name.
+            cell.value.clone()
+        } else {
+            v
+        };
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
         let v = match legacy {
@@ -532,6 +547,37 @@ fn formula_uses_text(expr: &Expr) -> bool {
         }
     });
     found
+}
+
+fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> bool {
+    let mut bound = HashSet::default();
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, args) = node {
+            let params = match name.as_str() {
+                "LET" => args.len().saturating_sub(1),
+                "LAMBDA" => args.len().saturating_sub(1),
+                _ => 0,
+            };
+            for i in (0..params).step_by(if name == "LET" { 2 } else { 1 }) {
+                if let Some(Expr::Name(variable)) = args.get(i) {
+                    bound.insert(gridcraft_formula::fold_name(variable));
+                }
+            }
+        }
+    });
+
+    let mut unresolved = false;
+    expr.walk(&mut |node| {
+        if let Expr::Name(name) = node {
+            let defined = wb.name(name, sheet);
+            let is_external = defined.is_some_and(|d| d.formula.trim_start().strip_prefix('=').unwrap_or(&d.formula).trim_start().starts_with('['));
+            let is_unknown = if defined.is_some() { is_external } else { gridcraft_functions::lookup(&name.to_ascii_uppercase()).is_none() };
+            if !bound.contains(&gridcraft_formula::fold_name(name)) && is_unknown {
+                unresolved = true;
+            }
+        }
+    });
+    unresolved
 }
 
 /// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit

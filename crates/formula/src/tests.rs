@@ -83,6 +83,7 @@ fn normalises() {
     assert_eq!(rt("=sum(a1:b2)"), "SUM(A1:B2)");
     assert_eq!(rt("= 1 + 2"), "1+2");
     assert_eq!(rt("_xlfn.XLOOKUP(1,A:A,B:B)"), "XLOOKUP(1,A:A,B:B)");
+    assert_eq!(rt("COM.SUN.STAR.SHEET.ADDIN.ANALYSIS.GETEOMONTH(A1,1)"), "EOMONTH(A1,1)");
     assert_eq!(rt("_xlfn.GROUPBY(A1:A3,B1:B3,_xleta.SUM)"), "GROUPBY(A1:A3,B1:B3,SUM)");
     assert_eq!(rt("_XLUDF.concat(\"a\",\"b\")"), "_xludf.CONCAT(\"a\",\"b\")");
     assert_eq!(rt("true"), "TRUE");

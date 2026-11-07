@@ -138,6 +138,8 @@ fn spread() {
     close_tol(ev("VAR.S", vec![c(&d)]), 754.2666667, 1e-9);
     close(ev("VAR.P", vec![c(&d)]), 678.84);
     close(ev("VARP", vec![c(&d)]), 678.84);
+    let excel_cached = [15.0, 77.0, 30.0, 28.0, 31.0, 96.0, 77.0, 53.0, 34.0, 12.545454545454545, 91.0];
+    assert_eq!(crate::util::round_half_away(ev("VAR.P", vec![c(&excel_cached)]).as_f64().unwrap(), 12), 853.648931083943);
     is_err(ev("STDEV.S", vec![n(1.0)]), CellError::Div0);
     close(ev("STDEV.P", vec![n(1.0)]), 0.0);
     let mixed = arr(vec![vec![nv(2.0), Value::Bool(true), tv("x")]]);
@@ -426,6 +428,14 @@ fn t_chi_f() {
     close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+}
+
+#[test]
+fn chi_square_inverse_retains_precision_used_by_round() {
+    let quantile = ev("CHISQ.INV.RT", vec![n(0.13333333333333333), n(5.0)]).as_f64().unwrap();
+    assert_eq!(crate::util::round_half_away(quantile, 12), 8.445480112857, "quantile={quantile:.17}");
+    let confidence = ev("CONFIDENCE.T", vec![n(0.13333333333333333), n(6.6), n(44.0)]).as_f64().unwrap();
+    assert_eq!(crate::util::round_half_away(confidence, 12), 1.522361125119, "confidence={confidence:.17}");
 }
 
 #[test]

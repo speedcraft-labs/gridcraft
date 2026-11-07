@@ -30,7 +30,10 @@ pub(super) fn var_p(x: &[f64]) -> R<f64> {
     if x.is_empty() {
         return Err(CellError::Div0);
     }
-    Ok(devsq(x) / x.len() as f64)
+    let n = x.len() as f64;
+    let mean = x.iter().sum::<f64>() / n;
+    let mean_square = x.iter().map(|v| v * v).sum::<f64>() / n;
+    Ok((mean_square - mean * mean).max(0.0))
 }
 
 fn sorted(mut v: Vec<f64>) -> Vec<f64> {
