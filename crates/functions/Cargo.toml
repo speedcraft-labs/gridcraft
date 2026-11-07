@@ -10,4 +10,8 @@ workspace = true
 
 [dependencies]
 gridcraft-core = { workspace = true }
+craft-text = { workspace = true }
 regex = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"

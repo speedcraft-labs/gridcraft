@@ -561,6 +561,22 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
     }
     ds.sort_unstable();
     ds.dedup();
+    // For larger delimiter sets, share one automaton traversal. Keep the old bounded path when
+    // its conservative work estimate exceeds the public work budget, so error behavior is stable.
+    let total_delimiter_len = ds.iter().try_fold(0u64, |sum, d| sum.checked_add(d.len() as u64));
+    let estimated_work = total_delimiter_len.and_then(|sum| (t.len() as u64).checked_mul(sum));
+    if !from_end && ds.len() > 3 && estimated_work.is_some_and(|work| work <= MAX_MATCH_WORK) {
+        let haystack: String = t.iter().collect();
+        let patterns: Vec<String> = ds.iter().map(|d| d.iter().collect()).collect();
+        let refs: Vec<_> = patterns.iter().map(String::as_str).collect();
+        if let Ok(matcher) = craft_text::matching::literal_matcher(&refs, false) {
+            let byte_starts: Vec<_> = haystack.char_indices().map(|(byte, _)| byte).chain(std::iter::once(haystack.len())).collect();
+            return Ok(craft_text::matching::find_literals(&matcher, &haystack)
+                .into_iter()
+                .filter_map(|hit| Some((byte_starts.binary_search(&hit.start).ok()?, byte_starts.binary_search(&hit.end).ok()?)))
+                .collect());
+        }
+    }
     // Delimiters by the character a match is anchored on.
     let mut by_char: HashMap<char, Vec<&[char]>> = HashMap::new();
     for d in &ds {
@@ -757,13 +773,7 @@ fn build_regex(pattern: &str, insensitive: bool) -> R<regex::Regex> {
     if pattern.len() > MAX_TEXT {
         return Err(CellError::Value);
     }
-    regex::RegexBuilder::new(pattern)
-        .case_insensitive(insensitive)
-        .size_limit(1 << 22)
-        .dfa_size_limit(1 << 22)
-        .nest_limit(100)
-        .build()
-        .map_err(|_| CellError::Value)
+    craft_text::matching::cached_regex_with_limits(pattern, insensitive, 1 << 22, 1 << 22, 100).map_err(|_| CellError::Value)
 }
 
 fn case_arg(a: &[Arg], i: usize) -> R<bool> {
@@ -1098,6 +1108,54 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 #[cfg(test)]
 mod tests {
     use gridcraft_core::{CellError, Value};
+    use proptest::prelude::*;
+
+    fn naive_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end: bool) -> Vec<(usize, usize)> {
+        let t = if insensitive { super::fold(text) } else { text.to_vec() };
+        let ds: Vec<_> = delims.iter().filter(|d| !d.is_empty()).map(|d| if insensitive { super::fold(d) } else { d.clone() }).collect();
+        if ds.is_empty() {
+            return (0..=t.len()).map(|i| (i, i)).collect();
+        }
+        let mut out = Vec::new();
+        if from_end {
+            let mut end = t.len();
+            while end > 0 {
+                let best = ds
+                    .iter()
+                    .filter(|d| end.checked_sub(d.len()).and_then(|start| t.get(start..end)).is_some_and(|s| s == d.as_slice()))
+                    .map(Vec::len)
+                    .max();
+                if let Some(len) = best {
+                    out.push((end - len, end));
+                    end -= len;
+                } else {
+                    end -= 1;
+                }
+            }
+            out.reverse();
+        } else {
+            let mut start = 0;
+            while start < t.len() {
+                let best = ds.iter().filter(|d| t.get(start..start + d.len()).is_some_and(|s| s == d.as_slice())).map(Vec::len).max();
+                if let Some(len) = best {
+                    out.push((start, start + len));
+                    start += len;
+                } else {
+                    start += 1;
+                }
+            }
+        }
+        out
+    }
+
+    proptest! {
+        #[test]
+        fn multi_pattern_matches_naive(text in "[a-c]{0,40}", delims in prop::collection::vec("[a-c]{0,7}", 0..9), insensitive in any::<bool>(), from_end in any::<bool>()) {
+            let text: Vec<char> = text.chars().collect();
+            let delims: Vec<Vec<char>> = delims.iter().map(|d| d.chars().collect()).collect();
+            prop_assert_eq!(super::find_matches(&text, &delims, insensitive, from_end), Ok(naive_matches(&text, &delims, insensitive, from_end)));
+        }
+    }
 
     /// The pieces expand exactly as `regex::Captures::expand` does.
     #[test]
