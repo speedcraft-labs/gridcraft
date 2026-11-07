@@ -1011,7 +1011,7 @@ dependencies = [
 [[package]]
 name = "craft-text"
 version = "0.1.0"
-source = "git+https://github.com/speedcraft-labs/craft-libs?rev=bb27188f00f58ecd6dacef7ae57c2da79957dbe0#bb27188f00f58ecd6dacef7ae57c2da79957dbe0"
+source = "git+https://github.com/speedcraft-labs/craft-libs?rev=315f3bd6d8fc68a194772e30e60909b83d73bc7b#315f3bd6d8fc68a194772e30e60909b83d73bc7b"
 dependencies = [
  "aho-corasick",
  "regex",
