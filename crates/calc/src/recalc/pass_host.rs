@@ -585,6 +585,10 @@ fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> boo
 pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
+        // A defined name can resolve to an array constant or a multi-cell reference. Older
+        // workbooks used the name in a scalar formula and implicitly selected its intersection,
+        // just as they did for a reference written directly in the formula.
+        Expr::Name(_) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),
         Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection(x, array_context))),
@@ -611,12 +615,14 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
                 .enumerate()
                 .map(|(i, a)| {
                     let consumes_range = legacy_array_arg(name, i);
-                    let returns_reference_or_array = matches!(
-                        a,
-                        Expr::Call(result, _)
-                            if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
-                                || legacy_returns_array(result)
-                    ) || matches!(a, Expr::Unary(UnOp::Spill, _));
+                    let returns_reference_or_array = matches!(a, Expr::Name(_))
+                        || matches!(
+                            a,
+                            Expr::Call(result, _)
+                                if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
+                                    || legacy_returns_array(result)
+                        )
+                        || matches!(a, Expr::Unary(UnOp::Spill, _));
                     let nested_array_context =
                         array_context || (name == "SUMPRODUCT" && consumes_range) || (consumes_range && returns_reference_or_array);
                     // Keep a range argument for the consuming function without making every
