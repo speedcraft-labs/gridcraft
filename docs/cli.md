@@ -70,8 +70,9 @@ recursively). Nothing is written next to the inputs.
 
 **Calc oracle.** A file saved by Excel (or another calculating app) stores the app's own result beside every formula.
 `check` reads each file keeping those cached values, recalculates formulas with GridCraft and compares:
-numbers within a relative `--tolerance` (absolute when the magnitude is below 1), errors by kind, text and logicals
-exactly. Skipped, and counted separately:
+numbers within a relative `--tolerance` (absolute when the magnitude is below 1), errors by kind after normalizing
+the cached XLSX representation (`#SPILL!`/`#CALC!` are stored as `#VALUE!`, and circular results as 0), and text
+and logicals exactly. Skipped, and counted separately:
 
 - *no oracle*: formulas saved without a value, and every formula of a file whose producer asked for a full
   recalculation on load (`fullCalcOnLoad`: libraries that don't calculate, such as xlsxwriter, store 0 or nothing).

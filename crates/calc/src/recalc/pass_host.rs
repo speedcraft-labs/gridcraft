@@ -13,6 +13,44 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// Imported dynamic-array extents, indexed by row so direct cell references can find their
+/// anchor without walking every dynamic formula on the sheet.
+#[derive(Default)]
+struct DeclaredSpillRanges {
+    by_row: Vec<(CellRef, RangeRef)>,
+    prefix_max_end_row: Vec<u32>,
+}
+
+impl DeclaredSpillRanges {
+    fn new(mut ranges: Vec<(CellRef, RangeRef)>) -> Self {
+        ranges.sort_unstable_by_key(|(_, range)| (range.start.row, range.start.col));
+        let mut max_end = 0;
+        let prefix_max_end_row = ranges
+            .iter()
+            .map(|(_, range)| {
+                max_end = max_end.max(range.end.row);
+                max_end
+            })
+            .collect();
+        Self { by_row: ranges, prefix_max_end_row }
+    }
+
+    fn anchor_for(&self, cell: CellRef) -> Option<CellRef> {
+        let mut i = self.by_row.partition_point(|(_, range)| range.start.row <= cell.row);
+        while i > 0 {
+            i -= 1;
+            if self.prefix_max_end_row.get(i).is_some_and(|&end| end < cell.row) {
+                break;
+            }
+            let (anchor, range) = self.by_row.get(i)?;
+            if *anchor != cell && range.contains(cell) {
+                return Some(*anchor);
+            }
+        }
+        None
+    }
+}
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -21,6 +59,8 @@ pub(super) struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Imported dynamic-array ranges for anchors that may still be pending this pass.
+    declared_spills: HashMap<usize, DeclaredSpillRanges>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -79,6 +119,19 @@ pub(super) struct PassHost<'a> {
 
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+        let mut declared: HashMap<usize, Vec<(CellRef, RangeRef)>> = HashMap::default();
+        for (sheet, sh) in wb.sheets.iter().enumerate() {
+            for (anchor, cell) in sh.cells.iter() {
+                if let Some(formula) = cell.formula.as_ref()
+                    && formula.dynamic
+                    && let Some(range) = formula.dynamic_array_range
+                    && range.start == anchor
+                {
+                    declared.entry(sheet).or_default().push((anchor, range));
+                }
+            }
+        }
+        let declared_spills = declared.into_iter().map(|(sheet, ranges)| (sheet, DeclaredSpillRanges::new(ranges))).collect();
         PassHost {
             wb,
             exprs,
@@ -86,6 +139,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            declared_spills,
             used: HashMap::default(),
             rng,
             now,
@@ -267,24 +321,7 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
-        if self.preserve_imported_formula_cache
-            && let Expr::Call(name, _) = expr.as_ref()
-            && is_cube_function(name)
-            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
-            && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
-            && !matches!(&cell.value, Value::Empty)
-        {
-            let value = cell.value.clone();
-            self.pending.remove(&k);
-            self.results.insert(k, value.clone());
-            return value;
-        }
-        if self.preserve_imported_formula_cache
-            && formula_uses_text(expr)
-            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
-            && !matches!(&cell.value, Value::Empty)
-        {
-            let value = cell.value.clone();
+        if let Some(value) = self.imported_formula_cache(k, expr) {
             self.pending.remove(&k);
             self.results.insert(k, value.clone());
             return value;
@@ -295,31 +332,8 @@ impl PassHost<'_> {
             self.results.insert(k, value.clone());
             return value;
         }
-        if self.suspend.is_some() {
-            // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
-            // calculated with the suspended one, so the evaluations are not restarted for each.
-            if self.depth >= MAX_NESTED && !self.in_progress.contains(&k) && !self.waiting.contains(&k) {
-                self.also.push(k);
-            }
-            return Value::Error(CellError::Calc);
-        }
-        if self.in_progress.contains(&k) || self.waiting.contains(&k) {
-            self.cycle = true;
-            if self.iterate {
-                return self.circular_read(k);
-            }
-            // Once each, though a suspended evaluation meets it again.
-            if self.cycle_seen.insert(k) {
-                self.cycles.push(k);
-            }
-            return Value::Error(CellError::Circ);
-        }
-        if self.depth >= MAX_NESTED {
-            self.suspend = Some(k);
-            return Value::Error(CellError::Calc);
-        }
-        if self.depth == 0 {
-            self.stack_top = stack_position();
+        if let Some(value) = self.prepare_evaluation(k) {
+            return value;
         }
         self.in_progress.insert(k);
         self.depth += 1;
@@ -327,7 +341,7 @@ impl PassHost<'_> {
         if self.iterate {
             self.stack.push(k);
         }
-        let expr = if legacy_formula { std::sync::Arc::new(legacy_intersection(expr, false)) } else { std::sync::Arc::clone(expr) };
+        let expr = if legacy_formula { legacy_intersection_arc(expr, false) } else { std::sync::Arc::clone(expr) };
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
@@ -359,15 +373,31 @@ impl PassHost<'_> {
         }
         let unavailable_reference = matches!(&v, Value::Error(CellError::Ref));
         let unavailable_name = matches!(&v, Value::Error(CellError::Name)) && formula_uses_unresolved_name(self.wb, k.0, &expr);
+        let cached_future_function_error = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|cell| {
+            matches!(&cell.value, Value::Error(CellError::Name))
+                && cell
+                    .formula
+                    .as_ref()
+                    .and_then(|formula| formula.source_text.as_deref())
+                    .is_some_and(|source| source.to_ascii_lowercase().contains("_xlfn."))
+        });
         let v = if self.preserve_imported_formula_cache
-            && legacy_formula
-            && (unavailable_reference || unavailable_name)
+            && matches!(&v, Value::Number(_))
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && matches!(&cell.value, Value::Text(text) if text.trim().parse::<f64>().is_ok_and(f64::is_finite))
+        {
+            // Some XLSX producers cache a numeric formula result as numeric text (`t="str"`).
+            // Keep that imported result type on load; an explicit recalculation uses the evaluator.
+            cell.value.clone()
+        } else if self.preserve_imported_formula_cache
+            && ((legacy_formula && (unavailable_reference || unavailable_name)) || cached_future_function_error)
             && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && !matches!(&cell.value, Value::Empty)
         {
             // A workbook can retain a cached result after a linked sheet, workbook or defined
-            // name becomes unavailable. Keep it during initial load; later recalculation uses
-            // the evaluator and reports the unresolved reference or name.
+            // name becomes unavailable. A future-function prefix with cached #NAME? also records
+            // that the producer could not evaluate this formula. Keep either cache on initial
+            // load; later recalculation uses the evaluator normally.
             cell.value.clone()
         } else {
             v
@@ -422,6 +452,54 @@ impl PassHost<'_> {
         };
         self.results.insert(k, v.clone());
         v
+    }
+
+    fn imported_formula_cache(&self, key: Key, expr: &Expr) -> Option<Value> {
+        if !self.preserve_imported_formula_cache {
+            return None;
+        }
+        let cell = self.wb.sheet(key.0)?.cell(key.1)?;
+        if let Expr::Call(name, _) = expr
+            && is_cube_function(name)
+            && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
+            && !matches!(&cell.value, Value::Empty)
+        {
+            return Some(cell.value.clone());
+        }
+        if formula_uses_text(expr) && !matches!(&cell.value, Value::Empty) {
+            return Some(cell.value.clone());
+        }
+        imported_error_cache(self.wb, key, expr)
+    }
+
+    fn prepare_evaluation(&mut self, key: Key) -> Option<Value> {
+        if self.suspend.is_some() {
+            // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
+            // calculated with the suspended one, so the evaluations are not restarted for each.
+            if self.depth >= MAX_NESTED && !self.in_progress.contains(&key) && !self.waiting.contains(&key) {
+                self.also.push(key);
+            }
+            return Some(Value::Error(CellError::Calc));
+        }
+        if self.in_progress.contains(&key) || self.waiting.contains(&key) {
+            self.cycle = true;
+            if self.iterate {
+                return Some(self.circular_read(key));
+            }
+            // Once each, though a suspended evaluation meets it again.
+            if self.cycle_seen.insert(key) {
+                self.cycles.push(key);
+            }
+            return Some(Value::Error(CellError::Circ));
+        }
+        if self.depth >= MAX_NESTED {
+            self.suspend = Some(key);
+            return Some(Value::Error(CellError::Calc));
+        }
+        if self.depth == 0 {
+            self.stack_top = stack_position();
+        }
+        None
     }
 
     /// Fast path for the scalar chain/fan-out shape `=A1+1`. It is deliberately narrow: both
@@ -549,6 +627,55 @@ fn formula_uses_text(expr: &Expr) -> bool {
     found
 }
 
+fn formula_uses_full_column_frequency(expr: &Expr) -> bool {
+    let mut full_column = false;
+    expr.walk(&mut |node| match node {
+        Expr::Ref(reference) if reference.range().is_full_cols() => full_column = true,
+        _ => {}
+    });
+    formula_uses_frequency(expr) && full_column
+}
+
+fn formula_uses_frequency(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("FREQUENCY");
+        }
+    });
+    found
+}
+
+fn formula_uses_legacy_excel_name_function(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("MAXIFS") || name.eq_ignore_ascii_case("MINIFS");
+        }
+    });
+    found
+}
+
+fn formula_uses_mode(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("MODE") || name.eq_ignore_ascii_case("MODE.SNGL");
+        }
+    });
+    found
+}
+
+fn imported_error_cache(wb: &Workbook, key: Key, expr: &Expr) -> Option<Value> {
+    let cell = wb.sheet(key.0)?.cell(key.1)?;
+    let Value::Error(error) = &cell.value else { return None };
+    let preserve_any_error = formula_uses_full_column_frequency(expr)
+        || formula_uses_frequency(expr) && cell.formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_some())
+        || formula_uses_mode(expr);
+    let preserve_name_error = *error == CellError::Name && formula_uses_legacy_excel_name_function(expr);
+    (preserve_any_error || preserve_name_error).then(|| cell.value.clone())
+}
+
 fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> bool {
     let mut bound = HashSet::default();
     expr.walk(&mut |node| {
@@ -583,26 +710,82 @@ fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> boo
 /// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit
 /// intersection. References passed to functions that consume ranges keep their array shape.
 pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
+    legacy_intersection_scoped(expr, array_context, &HashSet::default())
+}
+
+fn legacy_intersection_arc(expr: &std::sync::Arc<Expr>, array_context: bool) -> std::sync::Arc<Expr> {
+    if needs_legacy_intersection(expr) { std::sync::Arc::new(legacy_intersection(expr, array_context)) } else { std::sync::Arc::clone(expr) }
+}
+
+fn needs_legacy_intersection(expr: &Expr) -> bool {
+    let mut pending = vec![expr];
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::Ref(reference) if !reference.range().is_single() => return true,
+            Expr::Name(_) | Expr::Struct(_) | Expr::Unary(UnOp::Spill, _) => return true,
+            Expr::Call(name, _)
+                if legacy_returns_array(name) || matches!(name.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T") =>
+            {
+                return true;
+            }
+            Expr::Array(rows) => pending.extend(rows.iter().flatten()),
+            Expr::Unary(_, value) | Expr::Paren(value) => pending.push(value),
+            Expr::Binary(_, left, right) => {
+                pending.push(left);
+                pending.push(right);
+            }
+            Expr::Call(_, args) => pending.extend(args),
+            Expr::Invoke(callee, args) => {
+                pending.push(callee);
+                pending.extend(args);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &HashSet<String>) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
-        Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
-        Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),
-        Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection(x, array_context))),
-        Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
-            Expr::Binary(*op, Box::new(legacy_intersection(a, true)), Box::new(legacy_intersection(b, true)))
+        // A defined name can resolve to an array constant or a multi-cell reference. Older
+        // workbooks used the name in a scalar formula and implicitly selected its intersection,
+        // just as they did for a reference written directly in the formula.
+        Expr::Name(name) if !array_context && !bound_names.contains(&gridcraft_formula::fold_name(name)) => {
+            Expr::Unary(UnOp::At, Box::new(expr.clone()))
         }
-        Expr::Binary(op, a, b) => Expr::Binary(*op, Box::new(legacy_intersection(a, array_context)), Box::new(legacy_intersection(b, array_context))),
+        Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
+        Expr::Array(rows) => {
+            Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection_scoped(e, array_context, bound_names)).collect()).collect())
+        }
+        Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection_scoped(x, array_context, bound_names))),
+        Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
+            Expr::Binary(*op, Box::new(legacy_intersection_scoped(a, true, bound_names)), Box::new(legacy_intersection_scoped(b, true, bound_names)))
+        }
+        Expr::Binary(op, a, b) => Expr::Binary(
+            *op,
+            Box::new(legacy_intersection_scoped(a, array_context, bound_names)),
+            Box::new(legacy_intersection_scoped(b, array_context, bound_names)),
+        ),
+        Expr::Call(name, args) if name == "LET" && args.len() % 2 == 1 => legacy_let_intersection(name, args, array_context, bound_names),
+        Expr::Call(name, args) if name == "LAMBDA" && !args.is_empty() => legacy_lambda_intersection(name, args, array_context, bound_names),
         // These can return a reference or an array even from a scalar cell. Excel's implicit
         // intersection applies to that result (INDEX/OFFSET/INDIRECT) or selects its first row or
         // column number (ROW/COLUMN), so intersect the call result after keeping its input ranges.
         Expr::Call(name, args)
             if !array_context && matches!(name.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T") =>
         {
-            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            let call = Expr::Call(
+                name.clone(),
+                args.iter().enumerate().map(|(i, a)| legacy_intersection_scoped(a, legacy_array_arg(name, i), bound_names)).collect(),
+            );
             Expr::Unary(UnOp::At, Box::new(call))
         }
         Expr::Call(name, args) if !array_context && legacy_returns_array(name) => {
-            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            let call = Expr::Call(
+                name.clone(),
+                args.iter().enumerate().map(|(i, a)| legacy_intersection_scoped(a, legacy_array_arg(name, i), bound_names)).collect(),
+            );
             Expr::Unary(UnOp::At, Box::new(call))
         }
         Expr::Call(name, args) => Expr::Call(
@@ -611,25 +794,63 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
                 .enumerate()
                 .map(|(i, a)| {
                     let consumes_range = legacy_array_arg(name, i);
-                    let returns_reference_or_array = matches!(
-                        a,
-                        Expr::Call(result, _)
-                            if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
-                                || legacy_returns_array(result)
-                    ) || matches!(a, Expr::Unary(UnOp::Spill, _));
+                    let returns_reference_or_array = matches!(a, Expr::Name(_))
+                        || matches!(
+                            a,
+                            Expr::Call(result, _)
+                                if matches!(result.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T")
+                                    || legacy_returns_array(result)
+                        )
+                        || matches!(a, Expr::Unary(UnOp::Spill, _));
                     let nested_array_context =
                         array_context || (name == "SUMPRODUCT" && consumes_range) || (consumes_range && returns_reference_or_array);
                     // Keep a range argument for the consuming function without making every
                     // nested expression an array formula. SUMPRODUCT evaluates expressions
                     // element by element, so its array context continues through its arguments.
-                    if consumes_range && matches!(a, Expr::Ref(_)) { a.clone() } else { legacy_intersection(a, nested_array_context) }
+                    if consumes_range && matches!(a, Expr::Ref(_)) {
+                        a.clone()
+                    } else {
+                        legacy_intersection_scoped(a, nested_array_context, bound_names)
+                    }
                 })
                 .collect(),
         ),
-        Expr::Invoke(c, args) => Expr::Invoke(Box::new(legacy_intersection(c, false)), args.iter().map(|a| legacy_intersection(a, false)).collect()),
-        Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection(x, array_context))),
+        Expr::Invoke(c, args) => Expr::Invoke(
+            Box::new(legacy_intersection_scoped(c, false, bound_names)),
+            args.iter().map(|a| legacy_intersection_scoped(a, false, bound_names)).collect(),
+        ),
+        Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection_scoped(x, array_context, bound_names))),
         _ => expr.clone(),
     }
+}
+
+fn legacy_let_intersection(name: &str, args: &[Expr], array_context: bool, bound_names: &HashSet<String>) -> Expr {
+    let body_index = args.len().saturating_sub(1);
+    let mut scoped_names = bound_names.clone();
+    let mut rewritten = Vec::with_capacity(args.len());
+    for index in (0..body_index).step_by(2) {
+        rewritten.push(args[index].clone());
+        rewritten.push(legacy_intersection_scoped(&args[index + 1], array_context, &scoped_names));
+        if let Expr::Name(variable) = &args[index] {
+            scoped_names.insert(gridcraft_formula::fold_name(variable));
+        }
+    }
+    rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+    Expr::Call(name.to_string(), rewritten)
+}
+
+fn legacy_lambda_intersection(name: &str, args: &[Expr], array_context: bool, bound_names: &HashSet<String>) -> Expr {
+    let body_index = args.len() - 1;
+    let mut scoped_names = bound_names.clone();
+    let mut rewritten = Vec::with_capacity(args.len());
+    for argument in &args[..body_index] {
+        rewritten.push(argument.clone());
+        if let Expr::Name(variable) = argument {
+            scoped_names.insert(gridcraft_formula::fold_name(variable));
+        }
+    }
+    rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+    Expr::Call(name.to_string(), rewritten)
 }
 
 fn legacy_returns_array(name: &str) -> bool {
@@ -855,6 +1076,30 @@ impl Host for PassHost<'_> {
                     }
                     return arr.get(dr, dc).cloned().unwrap_or_default();
                 }
+            }
+        }
+        // A cached spill cell may be a direct reference precedent, not a range read. During a
+        // full recalculation, imported spill values have been dropped, so calculate the declared
+        // anchor; in a later pass its laid-out spill value is already on the sheet.
+        let declared_anchor = self.declared_spills.get(&sheet).and_then(|ranges| ranges.anchor_for(c));
+        if let Some(anchor) = declared_anchor {
+            let k = (sheet, anchor);
+            if self.pending.contains(&k) {
+                self.compute(k);
+                if let Some(arr) = self.spills.get(&k) {
+                    let (dr, dc) = ((c.row - anchor.row) as usize, (c.col - anchor.col) as usize);
+                    if dr < arr.rows && dc < arr.cols {
+                        if self.iterate && self.tainted.contains(&k) {
+                            self.taint = true;
+                        }
+                        return arr.get(dr, dc).cloned().unwrap_or_default();
+                    }
+                }
+            } else if let Some(value) = self.wb.sheet(sheet).and_then(|sh| sh.spill.get(&c)) {
+                if self.iterate && self.tainted.contains(&k) {
+                    self.taint = true;
+                }
+                return value.clone();
             }
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()

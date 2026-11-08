@@ -2,8 +2,30 @@ use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
-use gridcraft_formula::UnOp;
+use gridcraft_core::letters_to_col;
+use gridcraft_formula::{Anchor, RefKind, Reference, SheetSel, UnOp};
 use std::sync::Arc;
+
+/// Replaces matching errors in an array with the corresponding fallback value. A scalar fallback
+/// repeats; a fallback array broadcasts to the shape of the original value.
+fn if_error_array(array: &Array, alternate: Value, catches: impl Fn(CellError) -> bool + Copy) -> Value {
+    let data = array
+        .data
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            if item.as_error().is_some_and(catches) {
+                match &alternate {
+                    Value::Array(fallback) => fallback.get_broadcast(i / array.cols, i % array.cols),
+                    value => value.scalar(),
+                }
+            } else {
+                item.clone()
+            }
+        })
+        .collect();
+    Array::new(array.rows, array.cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+}
 
 impl<'h> Evaluator<'h> {
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
@@ -175,9 +197,7 @@ impl<'h> Evaluator<'h> {
             Ev::V(Value::Error(error)) if catches(*error) => self.eval(&args[1]),
             Ev::V(Value::Array(array)) if array.data.iter().any(|item| item.as_error().is_some_and(catches)) => {
                 let alternate = self.arg_val(args, 1).unwrap_or_default();
-                let data =
-                    array.data.iter().map(|item| if item.as_error().is_some_and(catches) { alternate.scalar() } else { item.clone() }).collect();
-                Ev::V(Array::new(array.rows, array.cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value)))
+                Ev::V(if_error_array(array, alternate, catches))
             }
             Ev::R(_) => self.if_error_reference(value.clone(), args, catches),
             _ => value,
@@ -189,9 +209,7 @@ impl<'h> Evaluator<'h> {
             Value::Error(error) if catches(error) => self.eval(&args[1]),
             Value::Array(ref array) if array.data.iter().any(|item| item.as_error().is_some_and(catches)) => {
                 let alternate = self.arg_val(args, 1).unwrap_or_default();
-                let data =
-                    array.data.iter().map(|item| if item.as_error().is_some_and(catches) { alternate.scalar() } else { item.clone() }).collect();
-                Ev::V(Array::new(array.rows, array.cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value)))
+                Ev::V(if_error_array(array, alternate, catches))
             }
             _ => value,
         }
@@ -249,8 +267,19 @@ impl<'h> Evaluator<'h> {
         if args.is_empty() || matches!(args.first(), Some(Expr::Missing)) {
             return Ev::V(Value::number(if is_row { self.at.row + 1 } else { self.at.col + 1 } as f64));
         }
-        let areas = match self.eval(&args[0]) {
+        let evaluated = self.eval(&args[0]);
+        let areas = match evaluated {
             Ev::R(areas) => areas,
+            Ev::V(Value::Error(CellError::Name)) if let Expr::Name(name) = &args[0] => {
+                let Some(col) = letters_to_col(name) else { return err(CellError::Name) };
+                let reference =
+                    Expr::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Cell(Anchor { row: 0, col, row_abs: false, col_abs: false }) });
+                match self.eval(&reference) {
+                    Ev::R(areas) => areas,
+                    Ev::V(Value::Error(error)) => return err(error),
+                    _ => return err(CellError::Ref),
+                }
+            }
             Ev::V(Value::Error(error)) => return err(error),
             _ => return err(CellError::Value),
         };

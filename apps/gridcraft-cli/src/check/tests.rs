@@ -99,6 +99,23 @@ fn errors_compare_by_kind() {
 }
 
 #[test]
+fn cached_error_values_match_their_xlsx_encoding() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_cell(at("A1"), Cell::value(n(1.0)));
+    sh.set_cell(at("A2"), Cell::value(n(2.0)));
+    sh.set_cell(at("B2"), Cell::value(Value::text("blocks the spill")));
+    let mut spill = Formula::new("=UNIQUE(A1:A2)");
+    spill.dynamic = true;
+    sh.set_cell(at("B1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(spill)), ..Default::default() });
+    sh.set_cell(at("C1"), Cell { value: n(0.0), formula: Some(Arc::new(Formula::new("=C1"))), ..Default::default() });
+
+    let r = check(&wb, &Options::default());
+    assert_eq!((r.calc.checked, r.calc.matched, r.calc.mismatched), (2, 2, 0), "{r:?}");
+    assert!(r.is_clean(), "{r:?}");
+}
+
+#[test]
 fn numbers_compare_within_tolerance() {
     assert!(values_match(&n(3.0000000001), &n(3.0), 1e-9));
     assert!(!values_match(&n(3.0000000001), &n(3.0), 1e-12));

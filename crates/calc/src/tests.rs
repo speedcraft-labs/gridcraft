@@ -87,6 +87,28 @@ fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
 }
 
 #[test]
+fn imported_dynamic_spill_direct_references_calculate_the_anchor() {
+    let mut t = T::new();
+    let mut source = Formula::new("=SEQUENCE(3)");
+    source.dynamic = true;
+    source.dynamic_array_range = Some(gridcraft_core::RangeRef::new(c("F5"), c("F7")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F5"), Cell::formula(source));
+    let mut anchor = Formula::new("=(F5)#");
+    anchor.dynamic = true;
+    anchor.dynamic_array_range = Some(gridcraft_core::RangeRef::new(c("K6"), c("K8")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("K6"), Cell::formula(anchor));
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!((t.num("K7"), t.num("K8")), (2.0, 3.0));
+
+    // A dependent can be recalculated in a later pass, after the dynamic anchor is no longer
+    // pending. Direct references still read its laid-out spill values.
+    t.set("A11", "=K7");
+    t.set("A12", "=K8");
+
+    assert_eq!((t.num("A11"), t.num("A12")), (2.0, 3.0));
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
@@ -350,6 +372,75 @@ fn file_load_keeps_cached_results_for_unavailable_names() {
 }
 
 #[test]
+fn file_load_keeps_cached_errors_for_future_functions() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    for (at, value) in [("A1", 0.0), ("A2", 2.0), ("A3", 3.0)] {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::value(Value::Number(value)));
+    }
+    let mut formula = Formula::new("=MINIFS(A1:A3,A1:A3,\">0\")");
+    formula.source_text = Some("_xlfn.MINIFS(A1:A3,A1:A3,\">0\")".into());
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), Cell { value: Value::Error(CellError::Name), formula: Some(Arc::new(formula)), ..Cell::default() });
+    let mut valid_error = Formula::new("=MINIFS(A1:A3,A1:A3,\">0\")");
+    valid_error.source_text = Some("_xlfn.MINIFS(A1:A3,A1:A3,\">0\")".into());
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("B2"), Cell { value: Value::Error(CellError::NA), formula: Some(Arc::new(valid_error)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::Error(CellError::Name));
+    assert_eq!(t.num("B2"), 2.0, "only a saved #NAME? marks the future function as unavailable");
+
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 2.0);
+}
+
+#[test]
+fn file_load_keeps_legacy_excel_name_errors_for_maxifs_and_minifs() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    t.set("A3", "3");
+    for (address, formula) in [("C1", "=MAXIFS(A1:A3,A1:A3,\">0\")"), ("C2", "=MINIFS(A1:A3,A1:A3,\">0\")")] {
+        let mut formula = Formula::new(formula);
+        formula.legacy = true;
+        t.wb.sheet_mut(0)
+            .unwrap()
+            .cells
+            .set(c(address), Cell { value: Value::Error(CellError::Name), formula: Some(Arc::new(formula)), ..Cell::default() });
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Error(CellError::Name));
+    assert_eq!(t.get("C2"), Value::Error(CellError::Name));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Number(3.0));
+    assert_eq!(t.get("C2"), Value::Number(1.0));
+}
+
+#[test]
+fn file_load_keeps_legacy_mode_errors_until_explicit_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let mut formula = Formula::new("=MODE(1,2)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("A1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Value));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+}
+
+#[test]
 fn file_load_keeps_cached_results_for_formula_text() {
     use std::sync::Arc;
 
@@ -367,6 +458,74 @@ fn file_load_keeps_cached_results_for_formula_text() {
     // An explicit recalc uses the source formula spelling rather than trusting its prior cache.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.get("B1"), Value::from("=1 + 2"));
+}
+
+#[test]
+fn file_load_respects_manual_calculation_and_keeps_saved_values() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.wb.calc.iterative = true;
+    t.wb.calc.set_max_iterations(1);
+    let imported = |text: &str, cached: f64| Cell { value: Value::Number(cached), formula: Some(Arc::new(Formula::new(text))), ..Cell::default() };
+    let sheet = t.wb.sheet_mut(0).unwrap();
+    sheet.cells.set(c("A1"), imported("=A1+1", 16.0));
+    sheet.cells.set(c("B1"), imported("=IF(ISODD(A1),-60,210)", 210.0));
+    sheet.cells.set(c("C1"), imported("=B1", 210.0));
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("B1"), t.get("C1")), (Value::Number(16.0), Value::Number(210.0), Value::Number(210.0)));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(17.0));
+}
+
+#[test]
+fn file_load_keeps_cached_errors_for_full_column_frequency_formulas() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    t.set("A3", "3");
+    let formula = Formula::new("=SUM(SIGN(FREQUENCY(A:A,ROW(B1:B3))))");
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("C1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(formula)), ..Cell::default() });
+    let mut array_formula = Formula::new("=SUM(SIGN(FREQUENCY(A1:A3,ROW(B1:B3))))");
+    array_formula.array = Some(gridcraft_core::RangeRef::cell(c("C2")));
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("C2"), Cell { value: Value::Error(CellError::NA), formula: Some(Arc::new(array_formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Error(CellError::Value));
+    assert_eq!(t.get("C2"), Value::Error(CellError::NA));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Number(3.0));
+    assert_eq!(t.get("C2"), Value::Number(3.0));
+}
+
+#[test]
+fn file_load_keeps_numeric_text_formula_caches_until_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    for (at, formula, cached) in [("A1", "=1", "1"), ("B1", "=SUM(A1,2)", "3")] {
+        t.wb.sheet_mut(0)
+            .unwrap()
+            .cells
+            .set(c(at), Cell { value: Value::from(cached), formula: Some(Arc::new(Formula::new(formula))), ..Cell::default() });
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::from("1"));
+    assert_eq!(t.get("B1"), Value::from("3"));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("B1"), Value::Number(3.0));
 }
 
 impl T {
@@ -880,6 +1039,10 @@ fn references_functions() {
     }
     t.set("B1", "=ROW(A3)");
     assert_eq!(t.num("B1"), 3.0);
+    t.set("B5", "=ROW(A)");
+    assert_eq!(t.num("B5"), 1.0);
+    t.set("B6", "=COLUMN(A)");
+    assert_eq!(t.num("B6"), 1.0);
     t.set("B2", "=ROWS(A1:A4)*COLUMNS(A1:C1)");
     assert_eq!(t.num("B2"), 12.0);
     t.set("B3", "=SUM(OFFSET(A1,1,0,2,1))");
@@ -1308,6 +1471,24 @@ fn legacy_array_formulas_fill_their_range() {
 }
 
 #[test]
+fn iferror_array_fallback_uses_matching_cell_in_legacy_array_formula() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "2"), ("A2", "4"), ("A3", "7"), ("A4", "7"), ("B1", "1"), ("B2", "1"), ("B3", "1"), ("B4", "1")] {
+        t.set(at, value);
+    }
+    let mut formula = Formula::new("=IFERROR(B1:B4/0,A1:A4)");
+    formula.array = gridcraft_core::RangeRef::parse("C1:C4");
+    t.wb.sheet_mut(0).unwrap().cells.set(c("C1"), Cell::formula(formula));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E2"), Cell::formula(Formula::new("=C2=A2")));
+    t.calc.recalc_all(&mut t.wb);
+
+    for (at, want) in [("C1", 2.0), ("C2", 4.0), ("C3", 7.0), ("C4", 7.0)] {
+        assert_eq!(t.num(at), want, "fallback element at {at}");
+    }
+    assert_eq!(t.get("E2"), Value::Bool(true), "a dependent formula reads the matching array value");
+}
+
+#[test]
 fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
     let mut t = T::new();
     t.set("A3", "north");
@@ -1336,6 +1517,53 @@ fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
     t.wb.sheet_mut(0).unwrap().cells.set(c("N1180"), Cell::formula(formula));
     t.calc.cells_changed(&mut t.wb, &[(0, c("N1180"))]);
     assert_eq!(t.get("N1180"), Value::Number(3.0));
+}
+
+#[test]
+fn imported_legacy_scalar_formula_intersects_defined_names() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {
+        t.set(at, value);
+    }
+    t.wb.names.extend([
+        gridcraft_model::DefinedName {
+            name: "GlobalRange".into(),
+            scope: None,
+            formula: "Sheet1!$A$1:$A$3".into(),
+            comment: String::new(),
+            hidden: false,
+        },
+        gridcraft_model::DefinedName { name: "GlobalArray".into(), scope: None, formula: "{1,2;4,5}".into(), comment: String::new(), hidden: false },
+    ]);
+
+    let mut range = Formula::new("=GlobalRange");
+    let mut array = Formula::new("=GlobalArray");
+    let mut sum = Formula::new("=SUM(GlobalArray)");
+    range.legacy = true;
+    array.legacy = true;
+    sum.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B2"), Cell::formula(range));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("D4"), Cell::formula(array));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E4"), Cell::formula(sum));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B2")), (0, c("D4")), (0, c("E4"))]);
+
+    assert_eq!(t.num("B2"), 20.0, "the defined range intersects the formula row");
+    assert_eq!(t.num("D4"), 1.0, "an array-valued name intersects at its top-left item");
+    assert_eq!(t.num("E4"), 12.0, "SUM still consumes the full array from the name");
+    for at in ["B2", "D4", "E4"] {
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c(at)), "legacy {at} does not spill");
+    }
+}
+
+#[test]
+fn imported_legacy_let_variables_are_not_intersected() {
+    let mut t = T::new();
+    t.set("A1", "10");
+    let mut formula = Formula::new("=LET(x,A1,x*2)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B1"))]);
+    assert_eq!(t.get("B1"), Value::Number(20.0));
 }
 
 #[test]
@@ -2510,6 +2738,28 @@ fn cell_filename_names_the_workbook_file() {
     t.calc = Calc::new();
     t.set("B7", "=CELL(\"filename\",A1)");
     assert_eq!(t.get("B7"), Value::from("[Book.xlsx]Info"));
+}
+
+#[test]
+fn omitted_sheet_in_defined_name_uses_the_formula_sheet() {
+    let mut t = T::new();
+    t.wb.source_path = Some(std::path::PathBuf::from("Book.xlsx"));
+    for name in ["2", "3"] {
+        t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new(name)));
+    }
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "PrevSheet".into(),
+        scope: None,
+        formula: "REPLACE(CELL(\"filename\",!A1),1,FIND(\"]\",CELL(\"filename\",!A1)),\"\")-1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for (sheet, cell) in [(1, "B1"), (2, "B1")] {
+        std::sync::Arc::make_mut(&mut t.wb.sheets[sheet]).cells.set(c(cell), Cell::formula(Formula::new("=PrevSheet")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.wb.sheets[1].value(c("B1")), Value::Number(1.0));
+    assert_eq!(t.wb.sheets[2].value(c("B1")), Value::Number(2.0));
 }
 
 #[test]

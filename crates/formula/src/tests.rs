@@ -88,6 +88,8 @@ fn normalises() {
     assert_eq!(rt("_XLUDF.concat(\"a\",\"b\")"), "_xludf.CONCAT(\"a\",\"b\")");
     assert_eq!(rt("true"), "TRUE");
     assert_eq!(rt("'Sheet1'!A1"), "Sheet1!A1");
+    assert_eq!(rt("!A1"), "A1");
+    assert_eq!(parse("!A1"), parse("A1"));
 }
 
 #[test]
@@ -100,6 +102,9 @@ fn spill_operator() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(rt("_xlfn.ANCHORARRAY(Sheet1!$D$1)"), "Sheet1!$D$1#");
     assert_eq!(rt("SUM(ANCHORARRAY(B2))"), "SUM(B2#)");
     for f in ["_xlfn.ANCHORARRAY((F5))", "_xlfn.ANCHORARRAY(F5:F7)", "_xlfn.ANCHORARRAY(INDEX(F5:F14,3))", "_xlfn.ANCHORARRAY((F5,H5))"] {
+        assert!(matches!(parse(f), Ok(Expr::Unary(UnOp::Spill, _))), "{f}");
+    }
+    for f in ["(F5)#", "INDEX(F5:F14,3)#"] {
         assert!(matches!(parse(f), Ok(Expr::Unary(UnOp::Spill, _))), "{f}");
     }
     // Only a cell can spill.
