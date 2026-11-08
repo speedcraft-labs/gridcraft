@@ -88,6 +88,13 @@ fn spill_range_operator() {
     assert_eq!(t.num("C1"), 3.0);
     t.set("D1", "=SUM(A1#)");
     assert_eq!(t.get("D1"), Value::Error(CellError::Ref));
+    let mut scalar_formula = Formula::new("=SUM(60)");
+    scalar_formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F1"), Cell::formula(scalar_formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("F1"))]);
+    t.set("G1", "=SUM(F1#)");
+    t.set("H1", "=ROWS(F1#)");
+    assert_eq!((t.num("G1"), t.num("H1")), (60.0, 1.0));
     // Through a defined name.
     t.wb.names.push(gridcraft_model::DefinedName {
         name: "Seq".into(),
