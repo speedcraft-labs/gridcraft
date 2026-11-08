@@ -341,7 +341,7 @@ impl PassHost<'_> {
         if self.iterate {
             self.stack.push(k);
         }
-        let expr = if legacy_formula { std::sync::Arc::new(legacy_intersection(expr, false)) } else { std::sync::Arc::clone(expr) };
+        let expr = if legacy_formula { legacy_intersection_arc(expr, false) } else { std::sync::Arc::clone(expr) };
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
@@ -713,6 +713,38 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
     legacy_intersection_scoped(expr, array_context, &HashSet::default())
 }
 
+fn legacy_intersection_arc(expr: &std::sync::Arc<Expr>, array_context: bool) -> std::sync::Arc<Expr> {
+    if needs_legacy_intersection(expr) { std::sync::Arc::new(legacy_intersection(expr, array_context)) } else { std::sync::Arc::clone(expr) }
+}
+
+fn needs_legacy_intersection(expr: &Expr) -> bool {
+    let mut pending = vec![expr];
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::Ref(reference) if !reference.range().is_single() => return true,
+            Expr::Name(_) | Expr::Struct(_) | Expr::Unary(UnOp::Spill, _) => return true,
+            Expr::Call(name, _)
+                if legacy_returns_array(name) || matches!(name.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T") =>
+            {
+                return true;
+            }
+            Expr::Array(rows) => pending.extend(rows.iter().flatten()),
+            Expr::Unary(_, value) | Expr::Paren(value) => pending.push(value),
+            Expr::Binary(_, left, right) => {
+                pending.push(left);
+                pending.push(right);
+            }
+            Expr::Call(_, args) => pending.extend(args),
+            Expr::Invoke(callee, args) => {
+                pending.push(callee);
+                pending.extend(args);
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &HashSet<String>) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
@@ -735,33 +767,8 @@ fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &Ha
             Box::new(legacy_intersection_scoped(a, array_context, bound_names)),
             Box::new(legacy_intersection_scoped(b, array_context, bound_names)),
         ),
-        Expr::Call(name, args) if name == "LET" && args.len() % 2 == 1 => {
-            let body_index = args.len().saturating_sub(1);
-            let mut scoped_names = bound_names.clone();
-            let mut rewritten = Vec::with_capacity(args.len());
-            for index in (0..body_index).step_by(2) {
-                rewritten.push(args[index].clone());
-                rewritten.push(legacy_intersection_scoped(&args[index + 1], array_context, &scoped_names));
-                if let Expr::Name(variable) = &args[index] {
-                    scoped_names.insert(gridcraft_formula::fold_name(variable));
-                }
-            }
-            rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
-            Expr::Call(name.clone(), rewritten)
-        }
-        Expr::Call(name, args) if name == "LAMBDA" && !args.is_empty() => {
-            let body_index = args.len() - 1;
-            let mut scoped_names = bound_names.clone();
-            let mut rewritten = Vec::with_capacity(args.len());
-            for argument in &args[..body_index] {
-                rewritten.push(argument.clone());
-                if let Expr::Name(variable) = argument {
-                    scoped_names.insert(gridcraft_formula::fold_name(variable));
-                }
-            }
-            rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
-            Expr::Call(name.clone(), rewritten)
-        }
+        Expr::Call(name, args) if name == "LET" && args.len() % 2 == 1 => legacy_let_intersection(name, args, array_context, bound_names),
+        Expr::Call(name, args) if name == "LAMBDA" && !args.is_empty() => legacy_lambda_intersection(name, args, array_context, bound_names),
         // These can return a reference or an array even from a scalar cell. Excel's implicit
         // intersection applies to that result (INDEX/OFFSET/INDIRECT) or selects its first row or
         // column number (ROW/COLUMN), so intersect the call result after keeping its input ranges.
@@ -815,6 +822,35 @@ fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &Ha
         Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection_scoped(x, array_context, bound_names))),
         _ => expr.clone(),
     }
+}
+
+fn legacy_let_intersection(name: &str, args: &[Expr], array_context: bool, bound_names: &HashSet<String>) -> Expr {
+    let body_index = args.len().saturating_sub(1);
+    let mut scoped_names = bound_names.clone();
+    let mut rewritten = Vec::with_capacity(args.len());
+    for index in (0..body_index).step_by(2) {
+        rewritten.push(args[index].clone());
+        rewritten.push(legacy_intersection_scoped(&args[index + 1], array_context, &scoped_names));
+        if let Expr::Name(variable) = &args[index] {
+            scoped_names.insert(gridcraft_formula::fold_name(variable));
+        }
+    }
+    rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+    Expr::Call(name.to_string(), rewritten)
+}
+
+fn legacy_lambda_intersection(name: &str, args: &[Expr], array_context: bool, bound_names: &HashSet<String>) -> Expr {
+    let body_index = args.len() - 1;
+    let mut scoped_names = bound_names.clone();
+    let mut rewritten = Vec::with_capacity(args.len());
+    for argument in &args[..body_index] {
+        rewritten.push(argument.clone());
+        if let Expr::Name(variable) = argument {
+            scoped_names.insert(gridcraft_formula::fold_name(variable));
+        }
+    }
+    rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+    Expr::Call(name.to_string(), rewritten)
 }
 
 fn legacy_returns_array(name: &str) -> bool {
