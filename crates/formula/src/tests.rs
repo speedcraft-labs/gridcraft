@@ -80,6 +80,22 @@ fn roundtrips() {
 }
 
 #[test]
+fn array_constants_treat_omitted_items_as_zero() {
+    assert_eq!(parse_name("{1,,3}"), Ok(Expr::Array(vec![vec![Expr::Number(1.0), Expr::Number(0.0), Expr::Number(3.0)]])));
+    assert_eq!(
+        parse_name("{1,,3;4,,6}"),
+        Ok(Expr::Array(vec![
+            vec![Expr::Number(1.0), Expr::Number(0.0), Expr::Number(3.0)],
+            vec![Expr::Number(4.0), Expr::Number(0.0), Expr::Number(6.0)],
+        ]))
+    );
+    assert!(parse_name("{,1}").is_err());
+    assert!(parse_name("{1,}").is_err());
+    assert!(parse_name("{1;}").is_err());
+    assert!(parse_name("{}").is_err());
+}
+
+#[test]
 fn normalises() {
     assert_eq!(rt("=sum(a1:b2)"), "SUM(A1:B2)");
     assert_eq!(rt("= 1 + 2"), "1+2");

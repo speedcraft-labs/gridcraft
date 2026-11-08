@@ -1657,6 +1657,24 @@ fn imported_legacy_scalar_formula_intersects_defined_names() {
 }
 
 #[test]
+fn omitted_array_constant_items_fill_legacy_array_formula_with_zero() {
+    let mut t = T::new();
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "EmptyArray".into(),
+        scope: None,
+        formula: "{1,,3}".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut formula = Formula::new("=EmptyArray");
+    formula.array = RangeRef::parse("A1:C1");
+    t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+
+    assert_eq!((t.num("A1"), t.num("B1"), t.num("C1")), (1.0, 0.0, 3.0));
+}
+
+#[test]
 fn imported_legacy_let_variables_are_not_intersected() {
     let mut t = T::new();
     t.set("A1", "10");

@@ -438,31 +438,41 @@ impl Parser {
 
     fn array(&mut self) -> Result<Expr, ParseError> {
         let mut rows = vec![Vec::new()];
+        let mut after_separator = false;
         loop {
-            let el = match self.next() {
-                Tok::Number(n) => Expr::Number(n),
-                Tok::Op("-") => match self.next() {
-                    Tok::Number(n) => Expr::Number(-n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
-                },
-                Tok::Op("+") => match self.next() {
+            let el = match self.peek() {
+                // Excel treats an omitted item in an array constant as numeric zero.
+                // Leave the separator for the common delimiter handling below.
+                Tok::Comma | Tok::Semicolon if after_separator => Expr::Number(0.0),
+                Tok::RBrace => return Err(self.err("array constants may not be empty")),
+                _ => match self.next() {
                     Tok::Number(n) => Expr::Number(n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    Tok::Op("-") => match self.next() {
+                        Tok::Number(n) => Expr::Number(-n),
+                        t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    },
+                    Tok::Op("+") => match self.next() {
+                        Tok::Number(n) => Expr::Number(n),
+                        t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    },
+                    Tok::Text(s) => Expr::Text(Arc::from(s)),
+                    Tok::Bool(b) => Expr::Bool(b),
+                    Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
+                        .map(Expr::Bool)
+                        .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
+                    Tok::Error(e) => Expr::Error(e),
+                    t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
                 },
-                Tok::Text(s) => Expr::Text(Arc::from(s)),
-                Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
-                    .map(Expr::Bool)
-                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
-                Tok::Error(e) => Expr::Error(e),
-                t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
             };
             if let Some(r) = rows.last_mut() {
                 r.push(el);
             }
             match self.next() {
-                Tok::Comma => {}
-                Tok::Semicolon => rows.push(Vec::new()),
+                Tok::Comma => after_separator = true,
+                Tok::Semicolon => {
+                    rows.push(Vec::new());
+                    after_separator = true;
+                }
                 Tok::RBrace => break,
                 t => return Err(self.err(format!("expected `,`, `;` or `}}`, found {}", describe(&t)))),
             }
