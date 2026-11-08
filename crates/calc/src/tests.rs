@@ -393,7 +393,6 @@ fn file_load_keeps_cached_errors_for_future_functions() {
     assert_eq!(t.get("B1"), Value::Error(CellError::Name));
     assert_eq!(t.num("B2"), 2.0, "only a saved #NAME? marks the future function as unavailable");
 
-    // An explicit later recalculation uses GridCraft's implemented function.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("B1"), 2.0);
 }
@@ -418,11 +417,27 @@ fn file_load_keeps_legacy_excel_name_errors_for_maxifs_and_minifs() {
     t.calc.recalc_all_from_file(&mut t.wb);
     assert_eq!(t.get("C1"), Value::Error(CellError::Name));
     assert_eq!(t.get("C2"), Value::Error(CellError::Name));
-
-    // Excel versions without these functions saved #NAME?; explicit recalculation evaluates them.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.get("C1"), Value::Number(3.0));
     assert_eq!(t.get("C2"), Value::Number(1.0));
+}
+
+#[test]
+fn file_load_keeps_legacy_mode_errors_until_explicit_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let mut formula = Formula::new("=MODE(1,2)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("A1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Value));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
 }
 
 #[test]

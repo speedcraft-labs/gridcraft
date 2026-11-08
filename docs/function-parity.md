@@ -89,6 +89,7 @@ This improves series preparation; it does not change the model-fitting or season
 | Imported legacy `FREQUENCY` formulas with full-column inputs or fixed-array metadata | preserve a saved nonempty error on load; explicit recalculation runs the evaluator |
 | `ROW(A)` / `COLUMN(A)` single-column-name shorthand | resolve the column name as its first-cell reference |
 | Cached `#NAME?` for `MAXIFS` / `MINIFS` saved by Excel versions without those functions | preserve the saved error on load; explicit recalculation evaluates the function |
+| Cached error results for legacy `MODE` formulas | preserve the saved error on load; explicit recalculation uses current evaluator behavior |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
 | SUBTOTAL / AGGREGATE input size | references trim to the used range; all areas, arrays and values of one call are charged against the 16-million-cell limit before any cell is read (skipped hidden, nested and error cells count), and `#NUM!` past it (#2175) |
 | Implicit intersection `@`, legacy CSE array formulas | imported legacy scalar formulas intersect references, spill results and defined names that resolve to arrays or ranges; functions consuming those names still receive the full array; legacy array range fill (PR #156); `IFERROR`/`IFNA` array fallbacks use the matching element |
