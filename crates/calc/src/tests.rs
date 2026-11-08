@@ -109,6 +109,22 @@ fn imported_dynamic_spill_direct_references_calculate_the_anchor() {
 }
 
 #[test]
+fn spill_reference_can_be_the_left_operand_of_an_intersection() {
+    let mut t = T::new();
+    t.set("F31", "=SEQUENCE(3)");
+    // The XLSX reader normalizes ANCHORARRAY to this spill-reference spelling before parsing it.
+    let mut formula = Formula::new("=F31# F31:H32");
+    formula.dynamic = true;
+    formula.dynamic_array_range = Some(gridcraft_core::RangeRef::new(c("F43"), c("F44")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F43"), Cell::formula(formula));
+    t.calc.recalc_all_from_file(&mut t.wb);
+
+    assert_eq!((t.num("F43"), t.num("F44")), (1.0, 2.0));
+    t.set("A44", "=F44");
+    assert_eq!(t.num("A44"), 2.0);
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");
