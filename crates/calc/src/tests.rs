@@ -1,10 +1,45 @@
-use gridcraft_core::{CellError, CellRef, Value};
-use gridcraft_model::{Cell, Formula, Workbook};
+use gridcraft_core::{CellError, CellRef, RangeRef, Value};
+use gridcraft_model::{Cell, Formula, PivotField, PivotTable, PivotValue, Workbook};
 
 use crate::Calc;
 
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
+}
+
+#[test]
+fn getpivotdata_reads_the_matching_pivot_item_and_grand_total() {
+    let mut t = T::new();
+    for (cell, value) in [
+        ("A8", "Row Labels"),
+        ("B8", "Sum of Score"),
+        ("A9", "Category 1"),
+        ("B9", "3"),
+        ("A10", "Category 2"),
+        ("B10", "12"),
+        ("A11", "Grand Total"),
+        ("B11", "15"),
+    ] {
+        t.set(cell, value);
+    }
+    t.wb.sheet_mut(0).unwrap().pivots.push(PivotTable {
+        source: "Data!$A$1:$B$4".into(),
+        anchor: c("A8"),
+        rows: vec![PivotField { source_col: "Category".into(), ..PivotField::default() }],
+        values: vec![PivotValue { source_col: "Score".into(), name: "Sum of Score".into(), ..PivotValue::default() }],
+        last_range: Some(RangeRef::new(c("A8"), c("B11"))),
+        ..PivotTable::default()
+    });
+
+    t.set("D1", "=GETPIVOTDATA(\"Sum of Score\",A8,\"Category\",\"Category 1\")");
+    t.set("D2", "=GETPIVOTDATA(\"Sum of Score\",B9,\"Category\",\"Category 2\")");
+    t.set("D3", "=GETPIVOTDATA(\"Sum of Score\",A8)");
+    t.set("D4", "=GETPIVOTDATA(\"Sum of Score\",A8,\"Missing\",\"x\")");
+
+    assert_eq!((t.num("D1"), t.num("D2"), t.num("D3")), (3.0, 12.0, 15.0));
+    assert_eq!(t.get("D4"), Value::Error(CellError::Ref));
+    t.set("B9", "9");
+    assert_eq!(t.num("D1"), 9.0);
 }
 
 struct T {

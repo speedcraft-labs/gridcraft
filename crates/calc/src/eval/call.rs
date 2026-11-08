@@ -2,7 +2,7 @@ use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
-use gridcraft_core::letters_to_col;
+use gridcraft_core::{CellRef, letters_to_col};
 use gridcraft_formula::{Anchor, RefKind, Reference, SheetSel, UnOp};
 use std::sync::Arc;
 
@@ -25,6 +25,16 @@ fn if_error_array(array: &Array, alternate: Value, catches: impl Fn(CellError) -
         })
         .collect();
     Array::new(array.rows, array.cols, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+}
+
+fn pivot_item_matches(label: &Value, item: &Value) -> bool {
+    match (label.scalar(), item.scalar()) {
+        (Value::Text(a), Value::Text(b)) => a.eq_ignore_ascii_case(&b),
+        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (Value::Empty, Value::Empty) => true,
+        _ => false,
+    }
 }
 
 impl<'h> Evaluator<'h> {
@@ -115,6 +125,7 @@ impl<'h> Evaluator<'h> {
                 };
                 Ev::V(zip2(&v, &f, one))
             }
+            "GETPIVOTDATA" => self.get_pivot_data(args),
             "LET" => self.let_(args),
             "LAMBDA" => {
                 if args.is_empty() {
@@ -260,6 +271,74 @@ impl<'h> Evaluator<'h> {
         } else {
             err(CellError::NA)
         }
+    }
+
+    fn get_pivot_data(&mut self, args: &[Expr]) -> Ev {
+        if args.len() < 2 || !(args.len() - 2).is_multiple_of(2) {
+            return err(CellError::Value);
+        }
+        let data_field = match self.value(&args[0]).scalar().to_text() {
+            Ok(s) if !s.trim().is_empty() => s,
+            Ok(_) => return err(CellError::Ref),
+            Err(e) => return err(e),
+        };
+        let pivot_ref = match self.eval(&args[1]) {
+            Ev::R(areas) => match areas.as_slice() {
+                [area] => *area,
+                _ => return err(CellError::Ref),
+            },
+            Ev::V(Value::Error(e)) => return err(e),
+            _ => return err(CellError::Ref),
+        };
+        let pivot_cell = pivot_ref.range.start;
+        let item = if args.len() > 2 {
+            if args.len() > 4 {
+                return err(CellError::Ref);
+            }
+            let field = match self.value(&args[2]).scalar().to_text() {
+                Ok(s) => s,
+                Err(e) => return err(e),
+            };
+            Some((field, self.value(&args[3]).scalar()))
+        } else {
+            None
+        };
+        let Some(sheet) = self.host.workbook().sheet(pivot_ref.sheet) else { return err(CellError::Ref) };
+        let Some(pivot) = sheet.pivots.iter().find(|pt| pt.last_range.is_some_and(|range| range.contains(pivot_cell))) else {
+            return err(CellError::Ref);
+        };
+
+        // Read the cached report rather than recomputing the pivot. The imported cells already
+        // represent its visible result, and this keeps calculation below the engine layer.
+        let supported =
+            pivot.rows.len() == 1 && pivot.columns.is_empty() && pivot.filters.is_empty() && pivot.values.len() == 1 && !pivot.values_on_rows;
+        if !supported || !pivot.values[0].name.eq_ignore_ascii_case(&data_field) {
+            return err(CellError::Ref);
+        }
+        let Some(report) = pivot.last_range else { return err(CellError::Ref) };
+        let label_col = pivot.anchor.col;
+        let value_col = report.end.col;
+        if label_col < report.start.col || label_col > report.end.col || value_col == label_col {
+            return err(CellError::Ref);
+        }
+
+        if let Some((field, _)) = &item
+            && !pivot.rows[0].source_col.eq_ignore_ascii_case(field)
+        {
+            return err(CellError::Ref);
+        }
+
+        for row in report.start.row..=report.end.row {
+            let label = sheet.value(CellRef::new(row, label_col)).scalar();
+            let matches = match &item {
+                Some((_, expected)) => pivot_item_matches(&label, expected),
+                None => matches!(&label, Value::Text(text) if text.eq_ignore_ascii_case("Grand Total")),
+            };
+            if matches {
+                return Ev::V(sheet.value(CellRef::new(row, value_col)).scalar());
+            }
+        }
+        err(CellError::Ref)
     }
 
     fn row_column_call(&mut self, name: &str, args: &[Expr]) -> Ev {
