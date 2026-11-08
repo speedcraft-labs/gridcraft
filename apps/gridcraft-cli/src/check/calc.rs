@@ -31,7 +31,26 @@ fn is_volatile(e: &Expr, volatile_names: &HashSet<String>) -> bool {
     v
 }
 
-/// Upper-cased defined names whose formula is volatile, directly or through other names.
+fn reference_uses_volatile_cell(wb: &Workbook, scope: Option<usize>, reference: &Reference, cells: &HashSet<Key>) -> bool {
+    let range = reference.range();
+    let on_sheet = |sheet| cells.iter().any(|&(s, cell)| s == sheet && range.contains(cell));
+    match &reference.sheet {
+        SheetSel::Named(name) => wb.sheet_index(name).is_some_and(on_sheet),
+        SheetSel::Span(first, last) => {
+            let (Some(first), Some(last)) = (wb.sheet_index(first), wb.sheet_index(last)) else { return false };
+            (first.min(last)..=first.max(last)).any(on_sheet)
+        }
+        SheetSel::Current => match scope {
+            Some(sheet) => on_sheet(sheet),
+            // A workbook-scoped name with an unqualified reference uses the calling sheet. It is
+            // volatile if that reference can reach a volatile formula on any sheet.
+            None => (0..wb.sheets.len()).any(on_sheet),
+        },
+    }
+}
+
+/// Upper-cased defined names whose formula is volatile, directly, through other names, or through
+/// a cell reference to a volatile formula.
 ///
 /// Volatility flows backwards along name references: each name is parsed and walked once, and a
 /// worklist carries volatility from a name to the names that use it. Rescanning every name until
@@ -60,6 +79,44 @@ pub(super) fn volatile_names(wb: &Workbook) -> HashSet<String> {
         });
         for r in used {
             users.entry(r).or_default().push(name.clone());
+        }
+    }
+    while let Some(v) = queue.pop() {
+        for user in users.remove(&v).unwrap_or_default() {
+            if set.insert(user.clone()) {
+                queue.push(user);
+            }
+        }
+    }
+
+    // A name can alias a volatile formula cell (`DATE_CELL` -> `Sheet1!A2`, where A2 is
+    // `TODAY()`). Such a name has no volatile call or name reference in its own formula, so the
+    // name-only pass above cannot identify it. Seed those names from the volatile formula cells,
+    // then carry volatility to names that refer to them.
+    let mut volatile_cells = HashSet::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (cell, data) in sh.cells.iter() {
+            if data.formula.as_ref().and_then(|f| f.expr_arc()).is_some_and(|e| is_volatile(&e, &set)) {
+                volatile_cells.insert((si, cell));
+            }
+        }
+    }
+    for n in &wb.names {
+        let name = n.name.to_ascii_uppercase();
+        if set.contains(&name) {
+            continue;
+        }
+        let Ok(e) = gridcraft_engine::formula::parse(&n.formula) else { continue };
+        let mut reaches_volatile_cell = false;
+        e.walk(&mut |x| {
+            if let Expr::Ref(reference) = x
+                && reference_uses_volatile_cell(wb, n.scope, reference, &volatile_cells)
+            {
+                reaches_volatile_cell = true;
+            }
+        });
+        if reaches_volatile_cell && set.insert(name.clone()) {
+            queue.push(name);
         }
     }
     while let Some(v) = queue.pop() {

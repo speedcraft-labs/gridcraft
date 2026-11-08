@@ -196,6 +196,22 @@ fn volatile_names_propagate() {
 }
 
 #[test]
+fn volatile_names_that_reference_volatile_cells_are_skipped() {
+    let mut wb = book(&[("A2", "=TODAY()", n(1.0)), ("B2", "=EDATE(DateCell,2)", n(2.0))]);
+    wb.names.push(gridcraft_engine::model::DefinedName {
+        name: "DateCell".into(),
+        scope: None,
+        formula: "Sheet1!$A$2".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+
+    assert!(volatile_names(&wb).contains("DATECELL"));
+    let report = check(&wb, &Options::default());
+    assert_eq!((report.calc.checked, report.calc.volatile, report.calc.mismatched), (0, 2, 0));
+}
+
+#[test]
 fn volatile_names_propagate_through_a_long_chain_in_one_walk() {
     // Chain0 uses Chain1, Chain1 uses Chain2, ... and only the last is volatile: listed in this order, a rescan
     // until nothing changes marked one name per pass (quadratic). Every name in the chain is
