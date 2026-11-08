@@ -26,7 +26,7 @@ fn find_column(db: &Array, label: &str) -> Option<usize> {
     })
 }
 
-/// Resolves the field argument: a label or a 1-based column number. `None` when omitted.
+/// Resolves the field argument: a label or a 1-based column number. `None` when omitted or zero.
 fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
     if !has(a, 1) {
         return Ok(None);
@@ -36,10 +36,12 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
         Value::Number(n) => {
             let i = n.trunc();
             // NaN too: it would pass both comparisons and become index 0 (#2163).
-            if i.is_nan() || i < 1.0 || i > db.cols as f64 {
+            if i.is_nan() || i < 0.0 || i > db.cols as f64 {
                 return Err(CellError::Value);
             }
-            Ok(Some((i as usize).saturating_sub(1)))
+            // Excel's database count functions use field 0 to count matching records.
+            // Other database functions reject the resulting absent field when selecting values.
+            Ok((i != 0.0).then_some((i as usize).saturating_sub(1)))
         }
         Value::Text(t) => find_column(db, &t).map(Some).ok_or(CellError::Value),
         Value::Bool(_) => Err(CellError::Value),
@@ -348,6 +350,8 @@ mod tests {
         close_tol(d("DVAR", t("Yield")), 1.333333333, 1e-9);
         close_tol(d("DVARP", t("Yield")), 0.888888889, 1e-9);
         close(d("DCOUNT", empty()), 3.0);
+        close(d("DCOUNT", n(0.0)), 3.0);
+        close(d("DCOUNTA", n(0.0)), 3.0);
         is_err(d("DSUM", t("Nope")), CellError::Value);
         is_err(d("DSUM", n(9.0)), CellError::Value);
     }
