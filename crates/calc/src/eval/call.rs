@@ -164,6 +164,15 @@ impl<'h> Evaluator<'h> {
                 self.host.note_volatile();
                 self.builtin(name, args)
             }
+            "RTD" => {
+                if !(3..=255).contains(&args.len()) {
+                    return err(CellError::Value);
+                }
+                // GridCraft has no COM automation host. Excel returns #N/A when the requested
+                // real-time data server is unavailable; resolve that before topic expressions,
+                // which may be names understood only by the server.
+                err(CellError::NA)
+            }
             _ => self.builtin(name, args),
         }
     }

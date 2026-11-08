@@ -22,7 +22,7 @@ use std::process::ExitCode;
 use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
 use gridcraft_engine::core::{CellError, CellRef, Value};
-use gridcraft_engine::formula::{Expr, quote_sheet};
+use gridcraft_engine::formula::{Expr, Reference, SheetSel, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 

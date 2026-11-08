@@ -117,6 +117,14 @@ pub(super) struct PassHost<'a> {
     preserve_imported_formula_cache: bool,
 }
 
+fn single_cell_formula_spill(wb: &Workbook, sheet: usize, anchor: CellRef, value: &Value) -> Option<RangeRef> {
+    let formula = wb.sheet(sheet)?.cells.get(anchor)?.formula.as_ref()?;
+    if !formula.legacy || formula.array.is_some() || matches!(value, Value::Error(_) | Value::Array(_)) {
+        return None;
+    }
+    Some(RangeRef::cell(anchor))
+}
+
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
         let mut declared: HashMap<usize, Vec<(CellRef, RangeRef)>> = HashMap::default();
@@ -1048,11 +1056,17 @@ impl Host for PassHost<'_> {
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
         if !(self.pending.contains(&k) || self.results.contains_key(&k)) {
-            return self.wb.sheet(sheet)?.spill_ranges.get(&anchor).copied();
+            let sh = self.wb.sheet(sheet)?;
+            if let Some(range) = sh.spill_ranges.get(&anchor) {
+                return Some(*range);
+            }
+            return single_cell_formula_spill(self.wb, sheet, anchor, &sh.cells.get(anchor)?.value);
         }
         // Recalculated in this pass: its new array, unless something blocks it (#SPILL!).
-        self.compute(k);
-        let arr = self.spills.get(&k)?;
+        let value = self.compute(k);
+        let Some(arr) = self.spills.get(&k) else {
+            return single_cell_formula_spill(self.wb, sheet, anchor, &value);
+        };
         let end = CellRef::new(
             anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
             anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)),
