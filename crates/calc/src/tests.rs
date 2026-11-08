@@ -1308,6 +1308,24 @@ fn legacy_array_formulas_fill_their_range() {
 }
 
 #[test]
+fn iferror_array_fallback_uses_matching_cell_in_legacy_array_formula() {
+    let mut t = T::new();
+    for (at, value) in [("A1", "2"), ("A2", "4"), ("A3", "7"), ("A4", "7"), ("B1", "1"), ("B2", "1"), ("B3", "1"), ("B4", "1")] {
+        t.set(at, value);
+    }
+    let mut formula = Formula::new("=IFERROR(B1:B4/0,A1:A4)");
+    formula.array = gridcraft_core::RangeRef::parse("C1:C4");
+    t.wb.sheet_mut(0).unwrap().cells.set(c("C1"), Cell::formula(formula));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("E2"), Cell::formula(Formula::new("=C2=A2")));
+    t.calc.recalc_all(&mut t.wb);
+
+    for (at, want) in [("C1", 2.0), ("C2", 4.0), ("C3", 7.0), ("C4", 7.0)] {
+        assert_eq!(t.num(at), want, "fallback element at {at}");
+    }
+    assert_eq!(t.get("E2"), Value::Bool(true), "a dependent formula reads the matching array value");
+}
+
+#[test]
 fn imported_legacy_scalar_formula_implicitly_intersects_whole_columns() {
     let mut t = T::new();
     t.set("A3", "north");
