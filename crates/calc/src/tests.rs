@@ -87,6 +87,28 @@ fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
 }
 
 #[test]
+fn imported_dynamic_spill_direct_references_calculate_the_anchor() {
+    let mut t = T::new();
+    let mut source = Formula::new("=SEQUENCE(3)");
+    source.dynamic = true;
+    source.dynamic_array_range = Some(gridcraft_core::RangeRef::new(c("F5"), c("F7")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("F5"), Cell::formula(source));
+    let mut anchor = Formula::new("=(F5)#");
+    anchor.dynamic = true;
+    anchor.dynamic_array_range = Some(gridcraft_core::RangeRef::new(c("K6"), c("K8")));
+    t.wb.sheet_mut(0).unwrap().cells.set(c("K6"), Cell::formula(anchor));
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!((t.num("K7"), t.num("K8")), (2.0, 3.0));
+
+    // A dependent can be recalculated in a later pass, after the dynamic anchor is no longer
+    // pending. Direct references still read its laid-out spill values.
+    t.set("A11", "=K7");
+    t.set("A12", "=K8");
+
+    assert_eq!((t.num("A11"), t.num("A12")), (2.0, 3.0));
+}
+
+#[test]
 fn arithmetic_and_dependencies() {
     let mut t = T::new();
     t.set("A1", "2");

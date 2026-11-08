@@ -100,3 +100,16 @@ fn dynamic_array_metadata_survives_saving_scalar_results() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     assert_written_dynamic(&write_xlsx(&back).unwrap());
 }
+
+#[test]
+fn imported_dynamic_formula_keeps_its_declared_spill_extent() {
+    let sheet = r#"<sheetData><row r="1"><c r="F1" cm="1"><f t="array" ref="F1:F3">SEQUENCE(3)</f><v>1</v></c></row><row r="2"><c r="F2"><v>2</v></c></row><row r="3"><c r="F3"><v>3</v></c></row></sheetData>"#;
+    let bytes = super::minimal(sheet, &[("xl/metadata.xml", METADATA)], METADATA_REL, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let formula = sh.cell(at("F1")).unwrap().formula.as_ref().unwrap();
+    assert!(formula.dynamic);
+    assert_eq!(formula.dynamic_array_range, Some(gridcraft_core::RangeRef::new(at("F1"), at("F3"))));
+    assert!(sh.value(at("F2")).is_empty(), "cached spill value should be recalculated from the anchor");
+    assert!(sh.value(at("F3")).is_empty(), "cached spill value should be recalculated from the anchor");
+}

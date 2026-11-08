@@ -220,6 +220,17 @@ impl Parser {
                 lhs = Expr::Unary(UnOp::Percent, Box::new(lhs));
                 continue;
             }
+            if *self.peek() == Tok::Op("#") && 100 >= min_bp && matches!(lhs, Expr::Paren(_) | Expr::Call(..) | Expr::Invoke(..)) {
+                // `ANCHORARRAY((A1))` and `ANCHORARRAY(INDEX(...))` normalize to a postfix
+                // spill operator after the wrapped reference expression.
+                postfix += 1;
+                if self.depth + postfix > MAX_DEPTH {
+                    return Err(self.err("formula is nested too deeply"));
+                }
+                self.next();
+                lhs = Expr::Unary(UnOp::Spill, Box::new(lhs));
+                continue;
+            }
             if *self.peek() == Tok::LParen && matches!(lhs, Expr::Call(..) | Expr::Invoke(..) | Expr::Paren(_) | Expr::Name(_)) {
                 // Invoking a LAMBDA result.
                 if let Expr::Name(_) = lhs {
