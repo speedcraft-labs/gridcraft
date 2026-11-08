@@ -359,15 +359,23 @@ impl PassHost<'_> {
         }
         let unavailable_reference = matches!(&v, Value::Error(CellError::Ref));
         let unavailable_name = matches!(&v, Value::Error(CellError::Name)) && formula_uses_unresolved_name(self.wb, k.0, &expr);
+        let cached_future_function_error = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|cell| {
+            matches!(&cell.value, Value::Error(CellError::Name))
+                && cell
+                    .formula
+                    .as_ref()
+                    .and_then(|formula| formula.source_text.as_deref())
+                    .is_some_and(|source| source.to_ascii_lowercase().contains("_xlfn."))
+        });
         let v = if self.preserve_imported_formula_cache
-            && legacy_formula
-            && (unavailable_reference || unavailable_name)
+            && ((legacy_formula && (unavailable_reference || unavailable_name)) || cached_future_function_error)
             && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && !matches!(&cell.value, Value::Empty)
         {
             // A workbook can retain a cached result after a linked sheet, workbook or defined
-            // name becomes unavailable. Keep it during initial load; later recalculation uses
-            // the evaluator and reports the unresolved reference or name.
+            // name becomes unavailable. A future-function prefix with cached #NAME? also records
+            // that the producer could not evaluate this formula. Keep either cache on initial
+            // load; later recalculation uses the evaluator normally.
             cell.value.clone()
         } else {
             v

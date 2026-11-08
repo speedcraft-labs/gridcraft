@@ -350,6 +350,33 @@ fn file_load_keeps_cached_results_for_unavailable_names() {
 }
 
 #[test]
+fn file_load_keeps_cached_errors_for_future_functions() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    for (at, value) in [("A1", 0.0), ("A2", 2.0), ("A3", 3.0)] {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::value(Value::Number(value)));
+    }
+    let mut formula = Formula::new("=MINIFS(A1:A3,A1:A3,\">0\")");
+    formula.source_text = Some("_xlfn.MINIFS(A1:A3,A1:A3,\">0\")".into());
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), Cell { value: Value::Error(CellError::Name), formula: Some(Arc::new(formula)), ..Cell::default() });
+    let mut valid_error = Formula::new("=MINIFS(A1:A3,A1:A3,\">0\")");
+    valid_error.source_text = Some("_xlfn.MINIFS(A1:A3,A1:A3,\">0\")".into());
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("B2"), Cell { value: Value::Error(CellError::NA), formula: Some(Arc::new(valid_error)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("B1"), Value::Error(CellError::Name));
+    assert_eq!(t.num("B2"), 2.0, "only a saved #NAME? marks the future function as unavailable");
+
+    // An explicit later recalculation uses GridCraft's implemented function.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B1"), 2.0);
+}
+
+#[test]
 fn file_load_keeps_cached_results_for_formula_text() {
     use std::sync::Arc;
 
