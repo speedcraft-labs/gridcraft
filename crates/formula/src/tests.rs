@@ -62,6 +62,7 @@ fn roundtrips() {
         "\"a\"\"b\"&C1",
         "SUM((A1:A3,C1:C3))",
         "A1:C3 B2:B5",
+        "A1# B1:C2",
         "LAMBDA(x,x+1)(2)",
         "F(1,,3)",
         "@A1:A10",
