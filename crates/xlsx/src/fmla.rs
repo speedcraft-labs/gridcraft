@@ -142,10 +142,90 @@ fn strip_param_prefix(n: String) -> String {
 /// Formula text read from a file → model text (strips prefixes when it parses).
 pub fn from_file(text: &str) -> String {
     let body = text.strip_prefix('=').unwrap_or(text);
-    match gridcraft_formula::parse(body) {
+    // A few producers write localized decimal commas into XLSX formula text even though the
+    // file formula syntax uses periods. Recover the unambiguous parenthesized numeric form,
+    // such as `A1-(-4,3)`, without treating commas in function argument lists as decimals.
+    let localized = decimal_comma_terms(body);
+    let source = localized.as_deref().unwrap_or(body);
+    match gridcraft_formula::parse(source) {
         Ok(e) => gridcraft_formula::print(&strip_param_prefixes(e)),
         Err(_) => body.to_string(),
     }
+}
+
+/// Rewrites commas in parenthesized numeric terms to decimal points. A parenthesis immediately
+/// following a function or name is an argument list, so its commas keep their normal meaning.
+fn decimal_comma_terms(src: &str) -> Option<String> {
+    let bytes = src.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut changed = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b'"') {
+            i += 1;
+            while i < bytes.len() {
+                if bytes.get(i) == Some(&b'"') {
+                    if bytes.get(i + 1) == Some(&b'"') {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if bytes.get(i) != Some(&b'(') {
+            i += 1;
+            continue;
+        }
+        if i > 0 && bytes.get(i - 1).is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'\\' | b']')) {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+            j += 1;
+        }
+        if bytes.get(j).is_some_and(|b| matches!(b, b'+' | b'-')) {
+            j += 1;
+            while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+                j += 1;
+            }
+        }
+        let integer_start = j;
+        while bytes.get(j).is_some_and(u8::is_ascii_digit) {
+            j += 1;
+        }
+        if j == integer_start || bytes.get(j) != Some(&b',') {
+            i += 1;
+            continue;
+        }
+        let comma = j;
+        j += 1;
+        let fraction_start = j;
+        while bytes.get(j).is_some_and(u8::is_ascii_digit) {
+            j += 1;
+        }
+        if j == fraction_start {
+            i += 1;
+            continue;
+        }
+        while bytes.get(j).is_some_and(u8::is_ascii_whitespace) {
+            j += 1;
+        }
+        if bytes.get(j) == Some(&b')') {
+            if let Some(b) = out.get_mut(comma) {
+                *b = b'.';
+                changed = true;
+            }
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    changed.then(|| String::from_utf8(out).unwrap_or_else(|_| src.to_string()))
 }
 
 fn strip_param_prefixes(e: Expr) -> Expr {
@@ -335,6 +415,14 @@ mod tests {
         let deleted = Formula::from_expr(Expr::Unary(gridcraft_formula::UnOp::Spill, Box::new(Expr::Error(gridcraft_core::CellError::Ref))));
         assert_eq!(deleted.text, "#REF!");
         assert_eq!(to_file(&deleted), "#REF!");
+    }
+
+    #[test]
+    fn localized_decimal_commas_in_parenthesized_terms() {
+        assert_eq!(from_file("L6-(-4,3)"), "L6-(-4.3)");
+        assert_eq!(from_file("A1+ ( 4,3 )"), "A1+(4.3)");
+        assert_eq!(from_file("SUM(1,2)"), "SUM(1,2)");
+        assert_eq!(from_file("\"(1,2)\"&A1"), "\"(1,2)\"&A1");
     }
 
     #[test]
