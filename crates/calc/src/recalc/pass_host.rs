@@ -798,6 +798,7 @@ fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &Ha
                 .map(|(i, a)| {
                     let consumes_range = legacy_array_arg(name, i);
                     let returns_reference_or_array = matches!(a, Expr::Name(_))
+                        || matches!(a, Expr::Struct(_))
                         || matches!(
                             a,
                             Expr::Call(result, _)
