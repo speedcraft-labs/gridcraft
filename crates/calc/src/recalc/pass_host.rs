@@ -344,14 +344,8 @@ impl PassHost<'_> {
             return value;
         }
         if self.preserve_imported_formula_cache
-            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
-            && ((matches!(&cell.value, Value::Error(_))
-                && (formula_uses_full_column_frequency(expr)
-                    || formula_uses_frequency(expr) && cell.formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_some())
-                    || formula_uses_mode(expr)))
-                || (formula_uses_legacy_excel_name_function(expr) && matches!(&cell.value, Value::Error(CellError::Name))))
+            && let Some(value) = imported_error_cache(self.wb, k, expr)
         {
-            let value = cell.value.clone();
             self.pending.remove(&k);
             self.results.insert(k, value.clone());
             return value;
@@ -669,6 +663,16 @@ fn formula_uses_mode(expr: &Expr) -> bool {
         }
     });
     found
+}
+
+fn imported_error_cache(wb: &Workbook, key: Key, expr: &Expr) -> Option<Value> {
+    let cell = wb.sheet(key.0)?.cell(key.1)?;
+    let Value::Error(error) = &cell.value else { return None };
+    let preserve_any_error = formula_uses_full_column_frequency(expr)
+        || formula_uses_frequency(expr) && cell.formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_some())
+        || formula_uses_mode(expr);
+    let preserve_name_error = *error == CellError::Name && formula_uses_legacy_excel_name_function(expr);
+    (preserve_any_error || preserve_name_error).then(|| cell.value.clone())
 }
 
 fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> bool {

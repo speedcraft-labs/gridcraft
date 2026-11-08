@@ -197,7 +197,7 @@ impl<'h> Evaluator<'h> {
             Ev::V(Value::Error(error)) if catches(*error) => self.eval(&args[1]),
             Ev::V(Value::Array(array)) if array.data.iter().any(|item| item.as_error().is_some_and(catches)) => {
                 let alternate = self.arg_val(args, 1).unwrap_or_default();
-                Ev::V(if_error_array(&array, alternate, catches))
+                Ev::V(if_error_array(array, alternate, catches))
             }
             Ev::R(_) => self.if_error_reference(value.clone(), args, catches),
             _ => value,
