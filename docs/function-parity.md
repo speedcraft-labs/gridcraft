@@ -81,6 +81,7 @@ This improves series preparation; it does not change the model-fitting or season
 | A1 and R1C1 references, absolute/relative/mixed, F4 cycling | done |
 | 3-D references (`Sheet1:Sheet3!A1`) | done; deleting a span's end sheet keeps the rest (#140) |
 | Structured references (`Table1[Col]`, `[#Totals]`, `@`; the unbracketed `[[#This Row],Col]` some writers emit) | done |
+| Imported parenthesized numeric terms written with a decimal comma | normalized to canonical decimal points without changing argument separators or quoted text |
 | Defined names (workbook and sheet scope), Create from Selection | done |
 | Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
