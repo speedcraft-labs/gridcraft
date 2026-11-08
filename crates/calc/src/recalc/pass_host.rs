@@ -344,10 +344,16 @@ impl PassHost<'_> {
             return value;
         }
         if self.preserve_imported_formula_cache
+<<<<<<< HEAD
             && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && matches!(&cell.value, Value::Error(_))
             && (formula_uses_full_column_frequency(expr)
                 || formula_uses_frequency(expr) && cell.formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_some()))
+=======
+            && formula_uses_legacy_excel_name_function(expr)
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && matches!(&cell.value, Value::Error(CellError::Name))
+>>>>>>> 5aa0ecf6 (Preserve older Excel MAXIFS and MINIFS cache errors)
         {
             let value = cell.value.clone();
             self.pending.remove(&k);
@@ -636,6 +642,16 @@ fn formula_uses_frequency(expr: &Expr) -> bool {
     expr.walk(&mut |node| {
         if let Expr::Call(name, _) = node {
             found |= name.eq_ignore_ascii_case("FREQUENCY");
+        }
+    });
+    found
+}
+
+fn formula_uses_legacy_excel_name_function(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("MAXIFS") || name.eq_ignore_ascii_case("MINIFS");
         }
     });
     found
