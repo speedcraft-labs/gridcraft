@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-07 · **Change:** minor (imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-08 · **Change:** minor (`TEXT(value,"")` preserves nonnumeric text; earlier: imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -131,6 +131,9 @@ fraction sections with literal text (`#\:#=/=#`, `#_#/#`), zero fractions, zero-
 denominators, `?` placeholders padding the thousands separator, and booleans through the text
 section (`TEXT(TRUE,";;;\@@\@")` = `@TRUE@`).
 
+An empty format string returns nonnumeric text unchanged (`TEXT("L0001","")` = `L0001`);
+numeric values with an empty format still return the empty string.
+
 `MEDIAN` and `AGGREGATE` function number 12 use an overflow-safe midpoint for even-sized
 inputs, so large finite middle values do not become `#NUM!` merely because their sum overflows (#1579).
 Sorting, argument coercion and error propagation are unchanged; this is a numerical correction
@@ -145,6 +148,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-08 | minor | `IFERROR`/`IFNA` array fallbacks now use the matching fallback-array element instead of repeating the top-left value |
+| 2026-11-08 | minor | `TEXT(value,"")` keeps nonnumeric text unchanged while numeric values still produce an empty string |
 | 2026-11-07 | minor | Imported legacy scalar formulas now implicitly intersect defined names that resolve to arrays or ranges, while array-consuming functions keep the full name result |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |

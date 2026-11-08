@@ -404,6 +404,10 @@ fn text_fn() {
     assert_eq!(text_function(&Value::Number(1.0 / 3.0), "0.000", S), Ok("0.333".into()));
     assert_eq!(text_function(&Value::Empty, "0.00", S), Ok("0.00".into()));
     assert_eq!(text_function(&Value::Number(5.0), "", S), Ok("".into()));
+    assert_eq!(text_function(&Value::from("L0001"), "", S), Ok("L0001".into()));
+    assert_eq!(text_function(&Value::from("5"), "", S), Ok("".into()));
+    assert_eq!(text_function(&Value::Bool(true), "", S), Ok("TRUE".into()));
+    assert_eq!(text_function(&Value::Error(CellError::NA), "", S), Err(CellError::NA));
     assert_eq!(text_function(&Value::Number(-1.0), "m/d/yyyy", S), Err(CellError::Value));
     assert_eq!(text_function(&Value::Number(2957003.0), "m/d/yyyy", DateSystem::D1904), Ok("12/31/9999".into()));
     assert_eq!(text_function(&Value::Number(2957004.0), "m/d/yyyy", DateSystem::D1904), Err(CellError::Value));
@@ -697,10 +701,16 @@ fn decimal_digits_keeps_fifteen_digits_and_truncates_a_tie() {
 
 // ---- parse cache ----
 
-/// `TEXT()` as it was before the cache: parse the code, then format.
+/// `TEXT()` with an uncached format parse, for comparison with the cached path.
 fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
-        return Ok(String::new());
+        return match v.scalar() {
+            Value::Error(e) => Err(e),
+            Value::Text(t) if gridcraft_core::parse::parse_number_text(&t).is_none() => Ok(t.to_string()),
+            Value::Bool(b) => Ok(if b { "TRUE" } else { "FALSE" }.into()),
+            Value::Array(_) => Err(CellError::Value),
+            _ => Ok(String::new()),
+        };
     }
     let fmt = NumberFormat::parse(code);
     let n = match v.scalar() {

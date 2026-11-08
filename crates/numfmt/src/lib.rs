@@ -425,7 +425,13 @@ impl NumberFormat {
 /// section, or are returned as is.
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
-        return Ok(String::new());
+        return match v.scalar() {
+            Value::Error(e) => Err(e),
+            Value::Text(t) if gridcraft_core::parse::parse_number_text(&t).is_none() => Ok(t.to_string()),
+            Value::Bool(b) => Ok(if b { "TRUE" } else { "FALSE" }.into()),
+            Value::Array(_) => Err(CellError::Value),
+            _ => Ok(String::new()),
+        };
     }
     if too_long(code) {
         return Err(CellError::Value);
