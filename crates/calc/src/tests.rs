@@ -476,8 +476,6 @@ fn file_load_respects_manual_calculation_and_keeps_saved_values() {
 
     t.calc.recalc_all_from_file(&mut t.wb);
     assert_eq!((t.get("A1"), t.get("B1"), t.get("C1")), (Value::Number(16.0), Value::Number(210.0), Value::Number(210.0)));
-
-    // Explicit calculation still advances the iterative circular formula.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.get("A1"), Value::Number(17.0));
 }
@@ -505,11 +503,29 @@ fn file_load_keeps_cached_errors_for_full_column_frequency_formulas() {
     t.calc.recalc_all_from_file(&mut t.wb);
     assert_eq!(t.get("C1"), Value::Error(CellError::Value));
     assert_eq!(t.get("C2"), Value::Error(CellError::NA));
-
-    // An explicit recalculation returns to the ordinary FREQUENCY evaluator.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.get("C1"), Value::Number(3.0));
     assert_eq!(t.get("C2"), Value::Number(3.0));
+}
+
+#[test]
+fn file_load_keeps_numeric_text_formula_caches_until_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    for (at, formula, cached) in [("A1", "=1", "1"), ("B1", "=SUM(A1,2)", "3")] {
+        t.wb.sheet_mut(0)
+            .unwrap()
+            .cells
+            .set(c(at), Cell { value: Value::from(cached), formula: Some(Arc::new(Formula::new(formula))), ..Cell::default() });
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::from("1"));
+    assert_eq!(t.get("B1"), Value::from("3"));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("B1"), Value::Number(3.0));
 }
 
 impl T {

@@ -435,6 +435,14 @@ impl PassHost<'_> {
                     .is_some_and(|source| source.to_ascii_lowercase().contains("_xlfn."))
         });
         let v = if self.preserve_imported_formula_cache
+            && matches!(&v, Value::Number(_))
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && matches!(&cell.value, Value::Text(text) if text.trim().parse::<f64>().is_ok_and(f64::is_finite))
+        {
+            // Some XLSX producers cache a numeric formula result as numeric text (`t="str"`).
+            // Keep that imported result type on load; an explicit recalculation uses the evaluator.
+            cell.value.clone()
+        } else if self.preserve_imported_formula_cache
             && ((legacy_formula && (unavailable_reference || unavailable_name)) || cached_future_function_error)
             && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
             && !matches!(&cell.value, Value::Empty)
