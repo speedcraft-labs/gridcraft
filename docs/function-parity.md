@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-08 · **Change:** minor (`TEXT(value,"")` preserves nonnumeric text; earlier: imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-08 · **Change:** minor (`GETPIVOTDATA` reads the supported static PivotTable layout; earlier: `TEXT(value,"")` preserves nonnumeric text; earlier: imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -31,7 +31,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 
 ## Coverage
 
-**Measured: 513 / 523 by name (98.1%); 504 / 523 working (96.4%).**
+**Measured: 514 / 523 by name (98.3%); 505 / 523 working (96.6%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
@@ -40,7 +40,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
-| Lookup and reference | 40 | 36 | 36 | 90% | GETPIVOTDATA, IMAGE, RTD, TRIMRANGE |
+| Lookup and reference | 40 | 37 | 37 | 93% | IMAGE, RTD, TRIMRANGE |
 | Compatibility | 40 | 40 | 40 | 100% | — |
 | Date and time | 25 | 25 | 25 | 100% | — |
 | Information | 22 | 21 | 21 | 95% | STOCKHISTORY |
@@ -50,7 +50,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
 | Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **505** | **496** | **94.8%** | 18 missing, 9 stubs |
+| **Total** | **523** | **506** | **497** | **95.0%** | 17 missing, 9 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 346 / 360, 2010
 56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
@@ -68,7 +68,7 @@ This improves series preparation; it does not change the model-fitting or season
 |---|---|---|---|
 | FORECAST.ETS family (4) | yes | 4–6 h | AAA exponential smoothing with seasonality detection; needed for Forecast Sheet too |
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
-| GETPIVOTDATA | yes | 2–3 h | Needs the pivot engine's result cache; also the "Generate GetPivotData" option |
+| GETPIVOTDATA | partial | — | Static PivotTables with one row field and one value field are supported; multiple fields, columns, and report filters remain. The "Generate GetPivotData" option is separate |
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
 | CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
@@ -149,6 +149,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 |---|---|---|
 | 2026-11-08 | minor | `IFERROR`/`IFNA` array fallbacks now use the matching fallback-array element instead of repeating the top-left value |
 | 2026-11-08 | minor | `TEXT(value,"")` keeps nonnumeric text unchanged while numeric values still produce an empty string |
+| 2026-11-08 | minor | `GETPIVOTDATA` reads static reports for one row field and one value field, including grand totals; unsupported pivot layouts return `#REF!` |
 | 2026-11-07 | minor | Imported legacy scalar formulas now implicitly intersect defined names that resolve to arrays or ranges, while array-consuming functions keep the full name result |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
