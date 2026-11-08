@@ -200,7 +200,12 @@ impl Calc {
 
     /// Recalculates a workbook as it is first loaded, retaining cached results for formulas that
     /// depend on source-only behavior, including unavailable cube connections and formula text.
+    /// A workbook in manual mode keeps every saved formula value until the user explicitly recalculates.
     pub fn recalc_all_from_file(&mut self, wb: &mut Workbook) {
+        if wb.calc.mode == CalcMode::Manual {
+            self.rebuild(wb);
+            return;
+        }
         self.recalc_all_inner(wb, true);
     }
 
