@@ -110,6 +110,16 @@ fn spill_range_operator() {
 }
 
 #[test]
+fn rtd_without_a_server_returns_na_before_resolving_topic_names() {
+    let mut t = T::new();
+    t.set("A1", "=RTD(1223,XL11,1)");
+    t.set("A2", "=RTD(123)");
+
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+    assert_eq!(t.get("A2"), Value::Error(CellError::Value));
+}
+
+#[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
     let mut t = T::new();

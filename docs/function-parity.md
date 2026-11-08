@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-08 · **Change:** minor (`GETPIVOTDATA` reads the supported static PivotTable layout; earlier: `TEXT(value,"")` preserves nonnumeric text; earlier: imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-08 · **Last updated:** 2026-11-08 · **Change:** minor (`RTD` is recognized and returns `#N/A` without a local real-time data server; earlier: `GETPIVOTDATA` reads the supported static PivotTable layout; `TEXT(value,"")` preserves nonnumeric text; imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; GROUPBY total depth 2 or more adds subtotals; Python cells are edited in the formula bar; the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -23,7 +23,8 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
-  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). On file load, imported CUBE
+  cube connections), RTD (`#N/A` without a real-time data server), and WEBSERVICE and FILTERXML
+  (`#VALUE!`). On file load, imported CUBE
   formulas keep the result their source application cached; editing the formula or a precedent
   recalculates it normally (and returns `#N/A` without an OLAP connection). Excel for Mac also lacks
   WEBSERVICE and FILTERXML; Excel for Windows has them.
@@ -31,7 +32,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 
 ## Coverage
 
-**Measured: 514 / 523 by name (98.3%); 505 / 523 working (96.6%).**
+**Measured: 515 / 523 by name (98.5%); 505 / 523 working (96.6%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
@@ -40,7 +41,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
-| Lookup and reference | 40 | 37 | 37 | 93% | IMAGE, RTD, TRIMRANGE |
+| Lookup and reference | 39 | 37 | 37 | 95% | IMAGE, TRIMRANGE |
 | Compatibility | 40 | 40 | 40 | 100% | — |
 | Date and time | 25 | 25 | 25 | 100% | — |
 | Information | 22 | 21 | 21 | 95% | STOCKHISTORY |
@@ -48,9 +49,9 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Database | 12 | 12 | 12 | 100% | — |
 | Cube | 7 | 7 | 0 | 0% | (all 7 are `#N/A` stubs) |
 | Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
-| Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
+| Add-in and Automation | 4 | 2 | 1 | 25% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **506** | **497** | **95.0%** | 17 missing, 9 stubs |
+| **Total** | **523** | **507** | **497** | **95.0%** | 16 missing, 10 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 346 / 360, 2010
 56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
@@ -72,7 +73,8 @@ This improves series preparation; it does not change the model-fitting or season
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
 | CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
-| CALL, REGISTER.ID, RTD | no | — | Native DLL/COM calls; not portable or safe |
+| RTD | partial | — | Recognized; without a local COM real-time data server it returns `#N/A`. Server integration remains out of scope |
+| CALL, REGISTER.ID | no | — | Native DLL/COM calls; not portable or safe |
 
 ## Formula language
 
