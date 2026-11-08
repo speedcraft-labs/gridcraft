@@ -343,6 +343,7 @@ impl Parser {
             Tok::Sheet(a, b) => {
                 let sheet = match b {
                     Some(b) => SheetSel::Span(a, b),
+                    None if a.is_empty() => SheetSel::Current,
                     None => SheetSel::Named(a),
                 };
                 match self.next() {
