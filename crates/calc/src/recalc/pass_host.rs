@@ -289,6 +289,16 @@ impl PassHost<'_> {
             self.results.insert(k, value.clone());
             return value;
         }
+        if self.preserve_imported_formula_cache
+            && formula_uses_legacy_excel_name_function(expr)
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && matches!(&cell.value, Value::Error(CellError::Name))
+        {
+            let value = cell.value.clone();
+            self.pending.remove(&k);
+            self.results.insert(k, value.clone());
+            return value;
+        }
         let legacy_formula = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.legacy);
         if !legacy_formula && let Some(value) = self.simple_numeric_add(k, expr) {
             self.pending.remove(&k);
@@ -544,6 +554,16 @@ fn formula_uses_text(expr: &Expr) -> bool {
     expr.walk(&mut |node| {
         if let Expr::Call(name, _) = node {
             found |= name.eq_ignore_ascii_case("FORMULATEXT");
+        }
+    });
+    found
+}
+
+fn formula_uses_legacy_excel_name_function(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("MAXIFS") || name.eq_ignore_ascii_case("MINIFS");
         }
     });
     found

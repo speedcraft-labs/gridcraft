@@ -350,6 +350,33 @@ fn file_load_keeps_cached_results_for_unavailable_names() {
 }
 
 #[test]
+fn file_load_keeps_legacy_excel_name_errors_for_maxifs_and_minifs() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    t.set("A3", "3");
+    for (address, formula) in [("C1", "=MAXIFS(A1:A3,A1:A3,\">0\")"), ("C2", "=MINIFS(A1:A3,A1:A3,\">0\")")] {
+        let mut formula = Formula::new(formula);
+        formula.legacy = true;
+        t.wb.sheet_mut(0)
+            .unwrap()
+            .cells
+            .set(c(address), Cell { value: Value::Error(CellError::Name), formula: Some(Arc::new(formula)), ..Cell::default() });
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Error(CellError::Name));
+    assert_eq!(t.get("C2"), Value::Error(CellError::Name));
+
+    // Excel versions without these functions saved #NAME?; explicit recalculation evaluates them.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Number(3.0));
+    assert_eq!(t.get("C2"), Value::Number(1.0));
+}
+
+#[test]
 fn file_load_keeps_cached_results_for_formula_text() {
     use std::sync::Arc;
 
