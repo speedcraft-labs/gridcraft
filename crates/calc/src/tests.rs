@@ -1556,6 +1556,17 @@ fn imported_legacy_scalar_formula_intersects_defined_names() {
 }
 
 #[test]
+fn imported_legacy_let_variables_are_not_intersected() {
+    let mut t = T::new();
+    t.set("A1", "10");
+    let mut formula = Formula::new("=LET(x,A1,x*2)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0).unwrap().cells.set(c("B1"), Cell::formula(formula));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B1"))]);
+    assert_eq!(t.get("B1"), Value::Number(20.0));
+}
+
+#[test]
 fn imported_legacy_scalar_formula_intersects_nested_array_operations() {
     let mut t = T::new();
     for (at, value) in [("A1", "10"), ("A2", "20"), ("A3", "30")] {

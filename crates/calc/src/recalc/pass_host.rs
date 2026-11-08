@@ -710,30 +710,75 @@ fn formula_uses_unresolved_name(wb: &Workbook, sheet: usize, expr: &Expr) -> boo
 /// Rewrites array-shaped references in scalar positions to Excel's pre-dynamic-array implicit
 /// intersection. References passed to functions that consume ranges keep their array shape.
 pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
+    legacy_intersection_scoped(expr, array_context, &HashSet::default())
+}
+
+fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &HashSet<String>) -> Expr {
     match expr {
         Expr::Ref(r) if !array_context && !r.range().is_single() => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         // A defined name can resolve to an array constant or a multi-cell reference. Older
         // workbooks used the name in a scalar formula and implicitly selected its intersection,
         // just as they did for a reference written directly in the formula.
-        Expr::Name(_) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
-        Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
-        Expr::Array(rows) => Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection(e, array_context)).collect()).collect()),
-        Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection(x, array_context))),
-        Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
-            Expr::Binary(*op, Box::new(legacy_intersection(a, true)), Box::new(legacy_intersection(b, true)))
+        Expr::Name(name) if !array_context && !bound_names.contains(&gridcraft_formula::fold_name(name)) => {
+            Expr::Unary(UnOp::At, Box::new(expr.clone()))
         }
-        Expr::Binary(op, a, b) => Expr::Binary(*op, Box::new(legacy_intersection(a, array_context)), Box::new(legacy_intersection(b, array_context))),
+        Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
+        Expr::Array(rows) => {
+            Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection_scoped(e, array_context, bound_names)).collect()).collect())
+        }
+        Expr::Unary(op, x) => Expr::Unary(*op, Box::new(legacy_intersection_scoped(x, array_context, bound_names))),
+        Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
+            Expr::Binary(*op, Box::new(legacy_intersection_scoped(a, true, bound_names)), Box::new(legacy_intersection_scoped(b, true, bound_names)))
+        }
+        Expr::Binary(op, a, b) => Expr::Binary(
+            *op,
+            Box::new(legacy_intersection_scoped(a, array_context, bound_names)),
+            Box::new(legacy_intersection_scoped(b, array_context, bound_names)),
+        ),
+        Expr::Call(name, args) if name == "LET" && args.len() % 2 == 1 => {
+            let body_index = args.len().saturating_sub(1);
+            let mut scoped_names = bound_names.clone();
+            let mut rewritten = Vec::with_capacity(args.len());
+            for index in (0..body_index).step_by(2) {
+                rewritten.push(args[index].clone());
+                rewritten.push(legacy_intersection_scoped(&args[index + 1], array_context, &scoped_names));
+                if let Expr::Name(variable) = &args[index] {
+                    scoped_names.insert(gridcraft_formula::fold_name(variable));
+                }
+            }
+            rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+            Expr::Call(name.clone(), rewritten)
+        }
+        Expr::Call(name, args) if name == "LAMBDA" && !args.is_empty() => {
+            let body_index = args.len() - 1;
+            let mut scoped_names = bound_names.clone();
+            let mut rewritten = Vec::with_capacity(args.len());
+            for argument in &args[..body_index] {
+                rewritten.push(argument.clone());
+                if let Expr::Name(variable) = argument {
+                    scoped_names.insert(gridcraft_formula::fold_name(variable));
+                }
+            }
+            rewritten.push(legacy_intersection_scoped(&args[body_index], array_context, &scoped_names));
+            Expr::Call(name.clone(), rewritten)
+        }
         // These can return a reference or an array even from a scalar cell. Excel's implicit
         // intersection applies to that result (INDEX/OFFSET/INDIRECT) or selects its first row or
         // column number (ROW/COLUMN), so intersect the call result after keeping its input ranges.
         Expr::Call(name, args)
             if !array_context && matches!(name.as_str(), "ROW" | "COLUMN" | "INDEX" | "OFFSET" | "INDIRECT" | "TRANSPOSE" | "T") =>
         {
-            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            let call = Expr::Call(
+                name.clone(),
+                args.iter().enumerate().map(|(i, a)| legacy_intersection_scoped(a, legacy_array_arg(name, i), bound_names)).collect(),
+            );
             Expr::Unary(UnOp::At, Box::new(call))
         }
         Expr::Call(name, args) if !array_context && legacy_returns_array(name) => {
-            let call = Expr::Call(name.clone(), args.iter().enumerate().map(|(i, a)| legacy_intersection(a, legacy_array_arg(name, i))).collect());
+            let call = Expr::Call(
+                name.clone(),
+                args.iter().enumerate().map(|(i, a)| legacy_intersection_scoped(a, legacy_array_arg(name, i), bound_names)).collect(),
+            );
             Expr::Unary(UnOp::At, Box::new(call))
         }
         Expr::Call(name, args) => Expr::Call(
@@ -755,12 +800,19 @@ pub(super) fn legacy_intersection(expr: &Expr, array_context: bool) -> Expr {
                     // Keep a range argument for the consuming function without making every
                     // nested expression an array formula. SUMPRODUCT evaluates expressions
                     // element by element, so its array context continues through its arguments.
-                    if consumes_range && matches!(a, Expr::Ref(_)) { a.clone() } else { legacy_intersection(a, nested_array_context) }
+                    if consumes_range && matches!(a, Expr::Ref(_)) {
+                        a.clone()
+                    } else {
+                        legacy_intersection_scoped(a, nested_array_context, bound_names)
+                    }
                 })
                 .collect(),
         ),
-        Expr::Invoke(c, args) => Expr::Invoke(Box::new(legacy_intersection(c, false)), args.iter().map(|a| legacy_intersection(a, false)).collect()),
-        Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection(x, array_context))),
+        Expr::Invoke(c, args) => Expr::Invoke(
+            Box::new(legacy_intersection_scoped(c, false, bound_names)),
+            args.iter().map(|a| legacy_intersection_scoped(a, false, bound_names)).collect(),
+        ),
+        Expr::Paren(x) => Expr::Paren(Box::new(legacy_intersection_scoped(x, array_context, bound_names))),
         _ => expr.clone(),
     }
 }
