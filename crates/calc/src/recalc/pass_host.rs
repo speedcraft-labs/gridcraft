@@ -289,6 +289,17 @@ impl PassHost<'_> {
             self.results.insert(k, value.clone());
             return value;
         }
+        if self.preserve_imported_formula_cache
+            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
+            && matches!(&cell.value, Value::Error(_))
+            && (formula_uses_full_column_frequency(expr)
+                || formula_uses_frequency(expr) && cell.formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_some()))
+        {
+            let value = cell.value.clone();
+            self.pending.remove(&k);
+            self.results.insert(k, value.clone());
+            return value;
+        }
         let legacy_formula = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.legacy);
         if !legacy_formula && let Some(value) = self.simple_numeric_add(k, expr) {
             self.pending.remove(&k);
@@ -544,6 +555,25 @@ fn formula_uses_text(expr: &Expr) -> bool {
     expr.walk(&mut |node| {
         if let Expr::Call(name, _) = node {
             found |= name.eq_ignore_ascii_case("FORMULATEXT");
+        }
+    });
+    found
+}
+
+fn formula_uses_full_column_frequency(expr: &Expr) -> bool {
+    let mut full_column = false;
+    expr.walk(&mut |node| match node {
+        Expr::Ref(reference) if reference.range().is_full_cols() => full_column = true,
+        _ => {}
+    });
+    formula_uses_frequency(expr) && full_column
+}
+
+fn formula_uses_frequency(expr: &Expr) -> bool {
+    let mut found = false;
+    expr.walk(&mut |node| {
+        if let Expr::Call(name, _) = node {
+            found |= name.eq_ignore_ascii_case("FREQUENCY");
         }
     });
     found

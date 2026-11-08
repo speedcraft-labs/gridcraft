@@ -369,6 +369,36 @@ fn file_load_keeps_cached_results_for_formula_text() {
     assert_eq!(t.get("B1"), Value::from("=1 + 2"));
 }
 
+#[test]
+fn file_load_keeps_cached_errors_for_full_column_frequency_formulas() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "2");
+    t.set("A3", "3");
+    let formula = Formula::new("=SUM(SIGN(FREQUENCY(A:A,ROW(B1:B3))))");
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("C1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(formula)), ..Cell::default() });
+    let mut array_formula = Formula::new("=SUM(SIGN(FREQUENCY(A1:A3,ROW(B1:B3))))");
+    array_formula.array = Some(gridcraft_core::RangeRef::cell(c("C2")));
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("C2"), Cell { value: Value::Error(CellError::NA), formula: Some(Arc::new(array_formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Error(CellError::Value));
+    assert_eq!(t.get("C2"), Value::Error(CellError::NA));
+
+    // An explicit recalculation returns to the ordinary FREQUENCY evaluator.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("C1"), Value::Number(3.0));
+    assert_eq!(t.get("C2"), Value::Number(3.0));
+}
+
 impl T {
     fn iterative(max_iterations: u32, max_change: f64) -> T {
         let mut t = T::new();
@@ -880,6 +910,10 @@ fn references_functions() {
     }
     t.set("B1", "=ROW(A3)");
     assert_eq!(t.num("B1"), 3.0);
+    t.set("B5", "=ROW(A)");
+    assert_eq!(t.num("B5"), 1.0);
+    t.set("B6", "=COLUMN(A)");
+    assert_eq!(t.num("B6"), 1.0);
     t.set("B2", "=ROWS(A1:A4)*COLUMNS(A1:C1)");
     assert_eq!(t.num("B2"), 12.0);
     t.set("B3", "=SUM(OFFSET(A1,1,0,2,1))");
