@@ -2513,6 +2513,28 @@ fn cell_filename_names_the_workbook_file() {
 }
 
 #[test]
+fn omitted_sheet_in_defined_name_uses_the_formula_sheet() {
+    let mut t = T::new();
+    t.wb.source_path = Some(std::path::PathBuf::from("Book.xlsx"));
+    for name in ["2", "3"] {
+        t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new(name)));
+    }
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "PrevSheet".into(),
+        scope: None,
+        formula: "REPLACE(CELL(\"filename\",!A1),1,FIND(\"]\",CELL(\"filename\",!A1)),\"\")-1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    for (sheet, cell) in [(1, "B1"), (2, "B1")] {
+        std::sync::Arc::make_mut(&mut t.wb.sheets[sheet]).cells.set(c(cell), Cell::formula(Formula::new("=PrevSheet")));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.wb.sheets[1].value(c("B1")), Value::Number(1.0));
+    assert_eq!(t.wb.sheets[2].value(c("B1")), Value::Number(2.0));
+}
+
+#[test]
 fn n_lifts_over_a_computed_array_but_reads_the_first_cell_of_a_range() {
     let mut t = T::new();
     t.set("B1", "0");

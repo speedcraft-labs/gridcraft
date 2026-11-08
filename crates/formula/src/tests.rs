@@ -88,6 +88,8 @@ fn normalises() {
     assert_eq!(rt("_XLUDF.concat(\"a\",\"b\")"), "_xludf.CONCAT(\"a\",\"b\")");
     assert_eq!(rt("true"), "TRUE");
     assert_eq!(rt("'Sheet1'!A1"), "Sheet1!A1");
+    assert_eq!(rt("!A1"), "A1");
+    assert_eq!(parse("!A1"), parse("A1"));
 }
 
 #[test]

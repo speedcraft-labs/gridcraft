@@ -298,6 +298,11 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
             '[' => {
                 i = structured_ref(src, &chars, i, start, &mut out)?;
             }
+            '!' if ch(i + 1).is_some_and(is_word_char) => {
+                // Defined names can qualify a reference with `!A1` to mean the caller's sheet.
+                emit(src, &chars, &mut out, Tok::Sheet(String::new(), None), start, i + 1);
+                i += 1;
+            }
             '.' if ch(i + 1) == Some(':') => {
                 // Trim reference `A1.:E10` / `A1.:.E10` (the word before stopped at the dot).
                 if ch(i + 2) == Some('.') && starts_range_end(ch(i + 3)) {
