@@ -182,11 +182,20 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let (dr, dc) = (dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                     moved.array = f.array.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
                     moved.dynamic = f.dynamic;
+                    moved.dynamic_array_range =
+                        f.dynamic_array_range.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?)));
                     moved.legacy = f.legacy;
                     return Some(std::sync::Arc::new(moved));
                 }
                 let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
-                Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, legacy: f.legacy, ..Formula::from_expr(moved) }))
+                let dr = dest.row as i64 - sc.row as i64;
+                let dc = dest.col as i64 - sc.col as i64;
+                Some(std::sync::Arc::new(Formula {
+                    dynamic: f.dynamic,
+                    dynamic_array_range: f.dynamic_array_range.and_then(|a| Some(RangeRef::new(a.start.offset(dr, dc)?, a.end.offset(dr, dc)?))),
+                    legacy: f.legacy,
+                    ..Formula::from_expr(moved)
+                }))
             };
             // A Python cell's code travels with it. Cut to another sheet, it keeps reading the
             // cells its `xl()` references named on its original sheet, as a moved formula does:
@@ -375,12 +384,17 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
                 Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
                 a => a,
             };
-            if (text != f.text || array != f.array)
+            let dynamic_array_range = match f.dynamic_array_range {
+                Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
+                a => a,
+            };
+            if (text != f.text || array != f.array || dynamic_array_range != f.dynamic_array_range)
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
                 let mut nf = Formula::from_expr(new);
                 nf.array = array;
                 nf.dynamic = f.dynamic;
+                nf.dynamic_array_range = dynamic_array_range;
                 nf.legacy = f.legacy;
                 cell.formula = Some(std::sync::Arc::new(nf));
             }

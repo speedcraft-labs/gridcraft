@@ -682,7 +682,9 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if !range.is_single() {
                 push_dynamic(st, range);
             }
-            if !dynamic {
+            if dynamic {
+                fm.dynamic_array_range = Some(range);
+            } else {
                 fm.array = Some(range);
             }
             Some(fm)

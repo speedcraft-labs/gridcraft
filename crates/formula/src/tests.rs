@@ -102,6 +102,9 @@ fn spill_operator() -> Result<(), Box<dyn std::error::Error>> {
     for f in ["_xlfn.ANCHORARRAY((F5))", "_xlfn.ANCHORARRAY(F5:F7)", "_xlfn.ANCHORARRAY(INDEX(F5:F14,3))", "_xlfn.ANCHORARRAY((F5,H5))"] {
         assert!(matches!(parse(f), Ok(Expr::Unary(UnOp::Spill, _))), "{f}");
     }
+    for f in ["(F5)#", "INDEX(F5:F14,3)#"] {
+        assert!(matches!(parse(f), Ok(Expr::Unary(UnOp::Spill, _))), "{f}");
+    }
     // Only a cell can spill.
     assert!(parse("A1:B2#").is_err());
     assert!(parse("Name#").is_err());

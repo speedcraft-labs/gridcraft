@@ -13,6 +13,44 @@ const MAX_NESTED: usize = 64;
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
 
+/// Imported dynamic-array extents, indexed by row so direct cell references can find their
+/// anchor without walking every dynamic formula on the sheet.
+#[derive(Default)]
+struct DeclaredSpillRanges {
+    by_row: Vec<(CellRef, RangeRef)>,
+    prefix_max_end_row: Vec<u32>,
+}
+
+impl DeclaredSpillRanges {
+    fn new(mut ranges: Vec<(CellRef, RangeRef)>) -> Self {
+        ranges.sort_unstable_by_key(|(_, range)| (range.start.row, range.start.col));
+        let mut max_end = 0;
+        let prefix_max_end_row = ranges
+            .iter()
+            .map(|(_, range)| {
+                max_end = max_end.max(range.end.row);
+                max_end
+            })
+            .collect();
+        Self { by_row: ranges, prefix_max_end_row }
+    }
+
+    fn anchor_for(&self, cell: CellRef) -> Option<CellRef> {
+        let mut i = self.by_row.partition_point(|(_, range)| range.start.row <= cell.row);
+        while i > 0 {
+            i -= 1;
+            if self.prefix_max_end_row.get(i).is_some_and(|&end| end < cell.row) {
+                break;
+            }
+            let (anchor, range) = self.by_row.get(i)?;
+            if *anchor != cell && range.contains(cell) {
+                return Some(*anchor);
+            }
+        }
+        None
+    }
+}
+
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
     exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
@@ -21,6 +59,8 @@ pub(super) struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Imported dynamic-array ranges for anchors that may still be pending this pass.
+    declared_spills: HashMap<usize, DeclaredSpillRanges>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -79,6 +119,19 @@ pub(super) struct PassHost<'a> {
 
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+        let mut declared: HashMap<usize, Vec<(CellRef, RangeRef)>> = HashMap::default();
+        for (sheet, sh) in wb.sheets.iter().enumerate() {
+            for (anchor, cell) in sh.cells.iter() {
+                if let Some(formula) = cell.formula.as_ref()
+                    && formula.dynamic
+                    && let Some(range) = formula.dynamic_array_range
+                    && range.start == anchor
+                {
+                    declared.entry(sheet).or_default().push((anchor, range));
+                }
+            }
+        }
+        let declared_spills = declared.into_iter().map(|(sheet, ranges)| (sheet, DeclaredSpillRanges::new(ranges))).collect();
         PassHost {
             wb,
             exprs,
@@ -86,6 +139,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            declared_spills,
             used: HashMap::default(),
             rng,
             now,
@@ -855,6 +909,30 @@ impl Host for PassHost<'_> {
                     }
                     return arr.get(dr, dc).cloned().unwrap_or_default();
                 }
+            }
+        }
+        // A cached spill cell may be a direct reference precedent, not a range read. During a
+        // full recalculation, imported spill values have been dropped, so calculate the declared
+        // anchor; in a later pass its laid-out spill value is already on the sheet.
+        let declared_anchor = self.declared_spills.get(&sheet).and_then(|ranges| ranges.anchor_for(c));
+        if let Some(anchor) = declared_anchor {
+            let k = (sheet, anchor);
+            if self.pending.contains(&k) {
+                self.compute(k);
+                if let Some(arr) = self.spills.get(&k) {
+                    let (dr, dc) = ((c.row - anchor.row) as usize, (c.col - anchor.col) as usize);
+                    if dr < arr.rows && dc < arr.cols {
+                        if self.iterate && self.tainted.contains(&k) {
+                            self.taint = true;
+                        }
+                        return arr.get(dr, dc).cloned().unwrap_or_default();
+                    }
+                }
+            } else if let Some(value) = self.wb.sheet(sheet).and_then(|sh| sh.spill.get(&c)) {
+                if self.iterate && self.tainted.contains(&k) {
+                    self.taint = true;
+                }
+                return value.clone();
             }
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()

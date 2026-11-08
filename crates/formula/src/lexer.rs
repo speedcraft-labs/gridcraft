@@ -287,7 +287,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i = j;
             }
             '"' | '\'' => i = quoted(src, &chars, i, start, &mut out)?,
-            '#' if out.last().is_some_and(|t: &Token| t.end == start && matches!(t.tok, Tok::Word(_))) => {
+            '#' if out.last().is_some_and(|t: &Token| t.end == start && matches!(t.tok, Tok::Word(_) | Tok::RParen)) => {
                 // Spill range operator right after a reference: `A1#`.
                 push(&mut out, Tok::Op("#"), i + 1);
                 i += 1;

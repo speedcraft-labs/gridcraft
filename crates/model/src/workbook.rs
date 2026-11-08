@@ -446,7 +446,15 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, legacy: f.legacy, ..Formula::from_expr(ne) }))
+                    (ne != e)
+                        .then(|| Formula {
+                            array: f.array,
+                            dynamic: f.dynamic,
+                            dynamic_array_range: f.dynamic_array_range,
+                            legacy: f.legacy,
+                            ..Formula::from_expr(ne)
+                        })
+                        .map(|nf| (c, nf))
                 })
                 .collect();
             if fixed.is_empty() {
