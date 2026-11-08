@@ -321,31 +321,7 @@ impl PassHost<'_> {
         let Some(expr) = self.exprs.get(&k) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
-        if self.preserve_imported_formula_cache
-            && let Expr::Call(name, _) = expr.as_ref()
-            && is_cube_function(name)
-            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
-            && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
-            && !matches!(&cell.value, Value::Empty)
-        {
-            let value = cell.value.clone();
-            self.pending.remove(&k);
-            self.results.insert(k, value.clone());
-            return value;
-        }
-        if self.preserve_imported_formula_cache
-            && formula_uses_text(expr)
-            && let Some(cell) = self.wb.sheet(k.0).and_then(|s| s.cell(k.1))
-            && !matches!(&cell.value, Value::Empty)
-        {
-            let value = cell.value.clone();
-            self.pending.remove(&k);
-            self.results.insert(k, value.clone());
-            return value;
-        }
-        if self.preserve_imported_formula_cache
-            && let Some(value) = imported_error_cache(self.wb, k, expr)
-        {
+        if let Some(value) = self.imported_formula_cache(k, expr) {
             self.pending.remove(&k);
             self.results.insert(k, value.clone());
             return value;
@@ -356,31 +332,8 @@ impl PassHost<'_> {
             self.results.insert(k, value.clone());
             return value;
         }
-        if self.suspend.is_some() {
-            // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
-            // calculated with the suspended one, so the evaluations are not restarted for each.
-            if self.depth >= MAX_NESTED && !self.in_progress.contains(&k) && !self.waiting.contains(&k) {
-                self.also.push(k);
-            }
-            return Value::Error(CellError::Calc);
-        }
-        if self.in_progress.contains(&k) || self.waiting.contains(&k) {
-            self.cycle = true;
-            if self.iterate {
-                return self.circular_read(k);
-            }
-            // Once each, though a suspended evaluation meets it again.
-            if self.cycle_seen.insert(k) {
-                self.cycles.push(k);
-            }
-            return Value::Error(CellError::Circ);
-        }
-        if self.depth >= MAX_NESTED {
-            self.suspend = Some(k);
-            return Value::Error(CellError::Calc);
-        }
-        if self.depth == 0 {
-            self.stack_top = stack_position();
+        if let Some(value) = self.prepare_evaluation(k) {
+            return value;
         }
         self.in_progress.insert(k);
         self.depth += 1;
@@ -499,6 +452,54 @@ impl PassHost<'_> {
         };
         self.results.insert(k, v.clone());
         v
+    }
+
+    fn imported_formula_cache(&self, key: Key, expr: &Expr) -> Option<Value> {
+        if !self.preserve_imported_formula_cache {
+            return None;
+        }
+        let cell = self.wb.sheet(key.0)?.cell(key.1)?;
+        if let Expr::Call(name, _) = expr
+            && is_cube_function(name)
+            && cell.formula.as_ref().is_some_and(|formula| formula.legacy)
+            && !matches!(&cell.value, Value::Empty)
+        {
+            return Some(cell.value.clone());
+        }
+        if formula_uses_text(expr) && !matches!(&cell.value, Value::Empty) {
+            return Some(cell.value.clone());
+        }
+        imported_error_cache(self.wb, key, expr)
+    }
+
+    fn prepare_evaluation(&mut self, key: Key) -> Option<Value> {
+        if self.suspend.is_some() {
+            // Unwinding to `calculate`: the value is thrown away. A formula read at the limit is
+            // calculated with the suspended one, so the evaluations are not restarted for each.
+            if self.depth >= MAX_NESTED && !self.in_progress.contains(&key) && !self.waiting.contains(&key) {
+                self.also.push(key);
+            }
+            return Some(Value::Error(CellError::Calc));
+        }
+        if self.in_progress.contains(&key) || self.waiting.contains(&key) {
+            self.cycle = true;
+            if self.iterate {
+                return Some(self.circular_read(key));
+            }
+            // Once each, though a suspended evaluation meets it again.
+            if self.cycle_seen.insert(key) {
+                self.cycles.push(key);
+            }
+            return Some(Value::Error(CellError::Circ));
+        }
+        if self.depth >= MAX_NESTED {
+            self.suspend = Some(key);
+            return Some(Value::Error(CellError::Calc));
+        }
+        if self.depth == 0 {
+            self.stack_top = stack_position();
+        }
+        None
     }
 
     /// Fast path for the scalar chain/fan-out shape `=A1+1`. It is deliberately narrow: both
