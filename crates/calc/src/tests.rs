@@ -999,6 +999,46 @@ fn arrays_do_not_spill_in_tables() {
 }
 
 #[test]
+fn legacy_structured_column_reference_implicitly_intersects() {
+    let mut t = T::new();
+    t.set("A1", "Name");
+    t.set("A2", "one");
+    t.set("A3", "two");
+    t.wb.sheet_mut(0).unwrap().tables.push(gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse("A1:A3").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![gridcraft_model::TableColumn {
+            name: "Name".into(),
+            totals: Default::default(),
+            totals_label: None,
+            formula: None,
+            unique_name: None,
+            xml: None,
+        }],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+
+    for address in ["C2", "C3"] {
+        let mut formula = Formula::new("=Table1[Name]");
+        formula.legacy = true;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(address), Cell::formula(formula));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.get("C2"), t.get("C3")), (Value::from("one"), Value::from("two")));
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");

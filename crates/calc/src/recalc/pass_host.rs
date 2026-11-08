@@ -754,6 +754,9 @@ fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &Ha
         Expr::Name(name) if !array_context && !bound_names.contains(&gridcraft_formula::fold_name(name)) => {
             Expr::Unary(UnOp::At, Box::new(expr.clone()))
         }
+        // A structured column reference is also a range. In a legacy scalar formula, select the
+        // row intersecting the formula cell; range-consuming functions keep the complete column.
+        Expr::Struct(_) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Unary(UnOp::Spill, _) if !array_context => Expr::Unary(UnOp::At, Box::new(expr.clone())),
         Expr::Array(rows) => {
             Expr::Array(rows.iter().map(|row| row.iter().map(|e| legacy_intersection_scoped(e, array_context, bound_names)).collect()).collect())
