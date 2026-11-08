@@ -83,6 +83,7 @@ This improves series preparation; it does not change the model-fitting or season
 | Structured references (`Table1[Col]`, `[#Totals]`, `@`; the unbracketed `[[#This Row],Col]` some writers emit) | done |
 | Imported parenthesized numeric terms written with a decimal comma | normalized to canonical decimal points without changing argument separators or quoted text |
 | Defined names (workbook and sheet scope), Create from Selection | done |
+| XLSX loaded in manual calculation mode | keeps saved formula values until an explicit recalculation |
 | Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157); imported `ANCHORARRAY((A1))` keeps its parenthesized spill operator parseable, and direct references to declared spill cells read their recalculated or laid-out values |
 | Imported `_xlfn.` formulas with a cached `#NAME?` | keep the saved error during initial file load; explicit recalculation evaluates the implemented function |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |

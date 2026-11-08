@@ -418,6 +418,28 @@ fn file_load_keeps_cached_results_for_formula_text() {
     assert_eq!(t.get("B1"), Value::from("=1 + 2"));
 }
 
+#[test]
+fn file_load_respects_manual_calculation_and_keeps_saved_values() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.wb.calc.iterative = true;
+    t.wb.calc.set_max_iterations(1);
+    let imported = |text: &str, cached: f64| Cell { value: Value::Number(cached), formula: Some(Arc::new(Formula::new(text))), ..Cell::default() };
+    let sheet = t.wb.sheet_mut(0).unwrap();
+    sheet.cells.set(c("A1"), imported("=A1+1", 16.0));
+    sheet.cells.set(c("B1"), imported("=IF(ISODD(A1),-60,210)", 210.0));
+    sheet.cells.set(c("C1"), imported("=B1", 210.0));
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!((t.get("A1"), t.get("B1"), t.get("C1")), (Value::Number(16.0), Value::Number(210.0), Value::Number(210.0)));
+
+    // Explicit calculation still advances the iterative circular formula.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(17.0));
+}
+
 impl T {
     fn iterative(max_iterations: u32, max_change: f64) -> T {
         let mut t = T::new();
