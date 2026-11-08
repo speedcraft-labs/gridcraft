@@ -350,6 +350,26 @@ fn file_load_keeps_cached_results_for_unavailable_names() {
 }
 
 #[test]
+fn file_load_keeps_legacy_mode_errors_until_explicit_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    let mut formula = Formula::new("=MODE(1,2)");
+    formula.legacy = true;
+    t.wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(c("A1"), Cell { value: Value::Error(CellError::Value), formula: Some(Arc::new(formula)), ..Cell::default() });
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Value));
+
+    // Older Excel caches can carry a different MODE error than current recalculation.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+}
+
+#[test]
 fn file_load_keeps_cached_results_for_formula_text() {
     use std::sync::Arc;
 
