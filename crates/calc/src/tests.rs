@@ -369,6 +369,27 @@ fn file_load_keeps_cached_results_for_formula_text() {
     assert_eq!(t.get("B1"), Value::from("=1 + 2"));
 }
 
+#[test]
+fn file_load_keeps_numeric_text_formula_caches_until_recalculation() {
+    use std::sync::Arc;
+
+    let mut t = T::new();
+    for (at, formula, cached) in [("A1", "=1", "1"), ("B1", "=SUM(A1,2)", "3")] {
+        t.wb.sheet_mut(0)
+            .unwrap()
+            .cells
+            .set(c(at), Cell { value: Value::from(cached), formula: Some(Arc::new(Formula::new(formula))), ..Cell::default() });
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::from("1"));
+    assert_eq!(t.get("B1"), Value::from("3"));
+
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("B1"), Value::Number(3.0));
+}
+
 impl T {
     fn iterative(max_iterations: u32, max_change: f64) -> T {
         let mut t = T::new();
