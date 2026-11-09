@@ -254,6 +254,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-06 | M0–M13 first pass: engine, 478 functions, XLSX/CSV, egui UI, charts, PivotTables with XLSX round-trip, PDF and printing, what-if, spelling, Draw, task panes, MCP, CLI, web build, release packaging |
 | 2026-10-05 | Repository created |
 
+- **2026-11-09 (issue #291):** Added a one-shot real-workbook benchmark adapter for opening, editing one cell and saving a public AIES workbook. Paired upstream/fork timings are pending; no speed claim is made yet.
+
 ## Revision history
 
 | Date | Change | Summary |
