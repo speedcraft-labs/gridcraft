@@ -490,7 +490,9 @@ fn pathological_source_at_the_cap_finishes_in_bounded_time() {
         fill("\\pu{", "kJ//", "}"),
     ];
     // A CI regression threshold with headroom for shared-runner variance, not a runtime deadline.
-    let bound = Duration::from_secs(15);
+    // The longest cases take about 20 s on a contended runner; 30 s still catches catastrophic
+    // backtracking (minutes) without making ordinary load variance flaky.
+    let bound = Duration::from_secs(30);
     let mut slow = Vec::new();
     for s in &sources {
         let start = Instant::now();
