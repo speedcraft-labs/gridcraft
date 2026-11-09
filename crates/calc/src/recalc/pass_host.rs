@@ -100,6 +100,8 @@ pub(super) struct PassHost<'a> {
     stack: Vec<Key>,
     /// Formulas found on a circular reference (when iterating).
     pub(super) members: HashSet<Key>,
+    /// Largest cycle observed in this pass, for the minimum imported iteration count.
+    max_cycle_size: usize,
     /// Results that read a previous value, directly or through other formulas.
     pub(super) tainted: HashSet<Key>,
     /// Whether the formula being evaluated has read a previous value.
@@ -167,6 +169,7 @@ impl<'a> PassHost<'a> {
             prev: HashMap::default(),
             stack: Vec::new(),
             members: HashSet::default(),
+            max_cycle_size: 0,
             tainted: HashSet::default(),
             taint: false,
             stack_top: 0,
@@ -573,9 +576,14 @@ impl PassHost<'_> {
     fn circular_read(&mut self, k: Key) -> Value {
         self.taint = true;
         match self.stack.iter().rposition(|s| *s == k) {
-            Some(i) => self.members.extend(self.stack.get(i..).unwrap_or_default().iter().copied()),
+            Some(i) => {
+                let cycle = self.stack.get(i..).unwrap_or_default();
+                self.max_cycle_size = self.max_cycle_size.max(cycle.len());
+                self.members.extend(cycle.iter().copied());
+            }
             // Too deep to follow: the formula itself is watched.
             None => {
+                self.max_cycle_size = self.max_cycle_size.max(1);
                 self.members.insert(k);
             }
         }
@@ -592,8 +600,13 @@ impl PassHost<'_> {
         let set: HashSet<Key> = again.iter().copied().collect();
         // Bounds the work whatever Maximum Iterations says.
         let max_passes = u32::try_from(MAX_ITERATION_WORK / again.len().max(1)).unwrap_or(u32::MAX).max(1);
+        // On initial file load, cache-seeded cycles can need one pass per member to propagate new
+        // values around the loop before Maximum Change is meaningful. Otherwise a nearly
+        // converged stale cache can stop before later formulas have seen earlier updates.
+        let minimum_passes =
+            if self.preserve_imported_formula_cache { u32::try_from(self.max_cycle_size.saturating_add(1)).unwrap_or(u32::MAX) } else { 1 };
         let mut passes = 1u32;
-        while passes < max_iterations.min(max_passes) && !self.converged(max_change) {
+        while passes < max_iterations.min(max_passes) && (passes < minimum_passes || !self.converged(max_change)) {
             self.prev = again.iter().filter_map(|k| self.results.remove(k).map(|v| (*k, v))).collect();
             self.pending = set.clone();
             self.spills.retain(|a, _| !set.contains(a));

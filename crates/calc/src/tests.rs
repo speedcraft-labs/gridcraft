@@ -655,6 +655,26 @@ fn iterative_calculation_converges_within_maximum_change() {
 }
 
 #[test]
+fn iterative_calculation_default_matches_excel_cached_convergence() {
+    let mut t = T::new();
+    t.wb.calc.iterative = true;
+    t.set("D4", "5");
+
+    for (address, formula, cached) in [("E4", "=D4+1", 6.0), ("E5", "=0.1*(E4+E6)", 1.333_333_26), ("E6", "=E4+E5", 7.333_333_26)] {
+        let mut cell = Cell::formula(Formula::new(formula));
+        cell.value = Value::Number(cached);
+        t.wb.sheet_mut(0).unwrap().cells.set(c(address), cell);
+    }
+
+    t.calc.recalc_all_from_file(&mut t.wb);
+
+    let excel_e5 = 1.333_333_332_6;
+    let excel_e6 = 7.333_333_332_6;
+    assert!((t.num("E5") - excel_e5).abs() < excel_e5 * 1e-9, "E5={}", t.num("E5"));
+    assert!((t.num("E6") - excel_e6).abs() < excel_e6 * 1e-9, "E6={}", t.num("E6"));
+}
+
+#[test]
 fn iterative_calculation_stops_once_changes_are_below_maximum_change() {
     // A1 halves its distance to 10 each pass, from 5: 7.5, 8.75, 9.375, 9.6875, and A2 trails
     // one pass behind. Maximum Change 1 stops once neither moved by 1 or more.
