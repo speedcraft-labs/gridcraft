@@ -148,9 +148,9 @@ pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>,
         for at in positions {
             let Some(formula) = sheet.cell(at).and_then(|c| c.formula.as_deref()) else { continue };
             if let Some(mut f) = legacy(wb, si, at, formula, functions, &mut names) {
-                // Rewriting with explicit `@` operators must retain the import metadata.
-                // The evaluator needs `legacy`; FORMULATEXT needs the source spelling.
-                f.legacy = formula.legacy;
+                // The expression now carries explicit `@` operators, so do not apply legacy
+                // intersection a second time in the evaluator. FORMULATEXT still needs the source.
+                f.legacy = false;
                 f.source_text = formula.source_text.clone();
                 changed.push((at, f));
             }
