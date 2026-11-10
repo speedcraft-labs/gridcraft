@@ -41,7 +41,7 @@ enum Operand {
 
 /// A parsed criterion.
 #[derive(Clone, Debug)]
-pub(crate) struct Criterion {
+pub struct Criterion {
     op: Op,
     operand: Operand,
     /// The criterion was a bare `""` (or empty cell text): matches blanks and empty strings.
@@ -65,7 +65,7 @@ impl Criterion {
     /// functions: like `parse`, but text longer than 255 UTF-16 code units is `#VALUE!`, as in
     /// Excel (checked on Excel 2016 and Microsoft 365: `"a"×254 & "😀"` is 255 characters but
     /// 256 units, and is `#VALUE!`).
-    pub(crate) fn parse_arg(v: &Value) -> Result<Criterion, CellError> {
+    pub fn parse_arg(v: &Value) -> Result<Criterion, CellError> {
         match v {
             Value::Array(a) => Criterion::parse_arg(a.data.first().unwrap_or(&Value::Empty)),
             // A UTF-8 string has at least as many bytes as UTF-16 units, so short text skips the count.
@@ -80,7 +80,7 @@ impl Criterion {
     /// doesn't reject a longer text criterion there: it matches its first 255 UTF-16 code units
     /// (checked on Excel 2016 and Microsoft 365 with COUNTIFS, SUMIFS, AVERAGEIFS, MAXIFS and
     /// MINIFS). A cut through a surrogate pair matches nothing; see `Operand::CutText`.
-    pub(crate) fn parse_arg_truncated(v: &Value) -> Criterion {
+    pub fn parse_arg_truncated(v: &Value) -> Criterion {
         match v {
             Value::Array(a) => Criterion::parse_arg_truncated(a.data.first().unwrap_or(&Value::Empty)),
             Value::Text(t) if t.len() > MAX_CRITERION_UTF16_UNITS => {
@@ -178,7 +178,7 @@ impl Criterion {
     }
 
     /// Whether a cell value satisfies the criterion.
-    pub(crate) fn matches(&self, v: &Value) -> bool {
+    pub fn matches(&self, v: &Value) -> bool {
         let v = match v {
             Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
             other => other.clone(),

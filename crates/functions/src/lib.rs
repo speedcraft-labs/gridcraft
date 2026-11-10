@@ -62,7 +62,7 @@ macro_rules! f {
     };
 }
 
-pub(crate) mod criteria;
+pub mod criteria;
 pub(crate) mod database;
 pub(crate) mod date;
 pub(crate) mod dynamic;

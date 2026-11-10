@@ -4,6 +4,7 @@ use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
 use gridcraft_core::{CellRef, letters_to_col};
 use gridcraft_formula::{Anchor, RefKind, Reference, SheetSel, UnOp};
+use gridcraft_functions::criteria::Criterion;
 use std::sync::Arc;
 
 /// Replaces matching errors in an array with the corresponding fallback value. A scalar fallback
@@ -33,6 +34,54 @@ fn pivot_item_matches(label: &Value, item: &Value) -> bool {
         (Value::Number(a), Value::Number(b)) => a == b,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Empty, Value::Empty) => true,
+        _ => false,
+    }
+}
+
+fn scalar_criterion_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Missing => true,
+        Expr::Ref(reference) => matches!(reference.kind, RefKind::Cell(_)),
+        Expr::Unary(_, inner) | Expr::Paren(inner) => scalar_criterion_expr(inner),
+        Expr::Binary(_, left, right) => scalar_criterion_expr(left) && scalar_criterion_expr(right),
+        Expr::Call(name, args) => {
+            let array_or_reference_result = matches!(
+                name.as_str(),
+                "CHOOSECOLS"
+                    | "CHOOSEROWS"
+                    | "FILTER"
+                    | "INDEX"
+                    | "INDIRECT"
+                    | "OFFSET"
+                    | "SEQUENCE"
+                    | "SORT"
+                    | "SORTBY"
+                    | "TEXTSPLIT"
+                    | "UNIQUE"
+                    | "VSTACK"
+                    | "HSTACK"
+                    | "MAKEARRAY"
+                    | "RANDARRAY"
+                    | "TAKE"
+                    | "DROP"
+                    | "EXPAND"
+                    | "TOCOL"
+                    | "TOROW"
+                    | "TRANSPOSE"
+                    | "WRAPCOLS"
+                    | "WRAPROWS"
+                    | "BYCOL"
+                    | "BYROW"
+                    | "GROUPBY"
+                    | "PIVOTBY"
+                    | "MAP"
+                    | "REDUCE"
+                    | "SCAN"
+            );
+            let known_scalar =
+                matches!(name.as_str(), "IF" | "IFERROR" | "IFNA") || gridcraft_functions::lookup(name).is_some_and(|spec| !spec.volatile);
+            !array_or_reference_result && known_scalar && args.iter().all(scalar_criterion_expr)
+        }
         _ => false,
     }
 }
@@ -402,6 +451,129 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// SUMIFS and COUNTIFS normally materialize every input range into a dense array. For
+    /// ordinary cell references over static data, fold the stored cells instead; ranges with
+    /// formulas, spills, array criteria or blank-matching criteria keep the established path.
+    fn sparse_ifs(&mut self, name: &str, args: &[Expr]) -> Option<Ev> {
+        let is_sum = name == "SUMIFS";
+        if !is_sum && name != "COUNTIFS" {
+            return None;
+        }
+        let first_pair = usize::from(is_sum);
+        if args.len() <= first_pair || !(args.len() - first_pair).is_multiple_of(2) {
+            return Some(err(CellError::Value));
+        }
+        let pairs = (args.len() - first_pair) / 2;
+        if pairs == 0 {
+            return Some(err(CellError::Value));
+        }
+
+        let mut ranges = Vec::with_capacity(pairs + usize::from(is_sum));
+        for pair in 0..pairs {
+            let index = first_pair + pair * 2;
+            let Expr::Ref(_) = args.get(index)? else { return None };
+            let Ev::R(areas) = self.eval(args.get(index)?) else { return None };
+            let [area] = areas.as_slice() else { return None };
+            ranges.push(*area);
+        }
+        let target = if is_sum {
+            let Expr::Ref(_) = args.first()? else { return None };
+            let Ev::R(areas) = self.eval(args.first()?) else { return None };
+            let [area] = areas.as_slice() else { return None };
+            Some(*area)
+        } else {
+            None
+        };
+
+        let first = ranges.first()?;
+        let shape = (first.range.height(), first.range.width());
+        let max_dimension = 16_384u64;
+        let shape_cells = u64::from(shape.0) * u64::from(shape.1);
+        if shape.0 == 0
+            || shape.1 == 0
+            || shape_cells > max_dimension
+            || ranges.iter().any(|area| (area.range.height(), area.range.width()) != shape)
+            || target.is_some_and(|area| (area.range.height(), area.range.width()) != shape)
+        {
+            return None;
+        }
+        let workbook = self.host.workbook();
+        let static_area = |area: &Area| {
+            workbook
+                .sheet(area.sheet)
+                .is_some_and(|sheet| !sheet.cells.iter_range(area.range).any(|(_, cell)| cell.formula.is_some() || cell.py.is_some()))
+        };
+        if !ranges.iter().all(static_area) || target.is_some_and(|area| !static_area(&area)) {
+            return None;
+        }
+        for index in (first_pair + 1..args.len()).step_by(2) {
+            if !scalar_criterion_expr(args.get(index)?) {
+                return None;
+            }
+        }
+
+        let mut criteria = Vec::with_capacity(pairs);
+        for pair in 0..pairs {
+            let index = first_pair + pair * 2 + 1;
+            let evaluated = self.value(args.get(index)?);
+            if matches!(evaluated, Value::Array(_)) {
+                return None;
+            }
+            let value = evaluated.scalar();
+            let criterion = if pairs == 1 {
+                match Criterion::parse_arg(&value) {
+                    Ok(criterion) => criterion,
+                    Err(error) => return Some(err(error)),
+                }
+            } else {
+                Criterion::parse_arg_truncated(&value)
+            };
+            if criterion.matches(&Value::Empty) {
+                return None;
+            }
+            criteria.push(criterion);
+        }
+
+        for area in ranges.iter().chain(target.iter()) {
+            if !self.host.visit_range(area.sheet, area.range, &mut |_| true) {
+                return None;
+            }
+        }
+
+        let (mut count, mut sum) = (0u64, 0.0);
+        let workbook = self.host.workbook();
+        let primary_sheet = workbook.sheet(first.sheet)?;
+        for (cell, entry) in primary_sheet.cells.iter_range(first.range) {
+            if !criteria.first()?.matches(&entry.value) {
+                continue;
+            }
+            let row = cell.row - first.range.start.row;
+            let col = cell.col - first.range.start.col;
+            let mut matches = true;
+            for (area, criterion) in ranges.iter().skip(1).zip(criteria.iter().skip(1)) {
+                let at = CellRef::new(area.range.start.row + row, area.range.start.col + col);
+                if !criterion.matches(&workbook.sheet(area.sheet)?.value(at).scalar()) {
+                    matches = false;
+                    break;
+                }
+            }
+            if !matches {
+                continue;
+            }
+            if let Some(area) = target {
+                let at = CellRef::new(area.range.start.row + row, area.range.start.col + col);
+                match workbook.sheet(area.sheet)?.value(at).scalar() {
+                    Value::Number(value) => sum += value,
+                    Value::Error(error) => return Some(err(error)),
+                    _ => {}
+                }
+            } else {
+                count = count.saturating_add(1);
+            }
+        }
+        Some(Ev::V(Value::number(if is_sum { sum } else { count as f64 })))
+    }
+
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
             // A defined name holding a LAMBDA, or a LET-bound lambda.
@@ -416,6 +588,9 @@ impl<'h> Evaluator<'h> {
         }
         if let Some(kind) = Agg::of(spec.name) {
             return self.aggregate(kind, args);
+        }
+        if let Some(result) = self.sparse_ifs(name, args) {
+            return result;
         }
         let mut evaluated = Vec::with_capacity(args.len());
         // SUMIF/AVERAGEIF: the size of the criteria range (argument 1), which the sum range takes.
