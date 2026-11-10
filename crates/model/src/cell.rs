@@ -103,15 +103,29 @@ impl Formula {
 #[derive(Deserialize)]
 struct SavedFormula {
     text: String,
+    #[serde(default)]
+    source_text: Option<String>,
     array: Option<RangeRef>,
     #[serde(default)]
     dynamic: bool,
+    #[serde(default)]
+    dynamic_array_range: Option<RangeRef>,
+    #[serde(default)]
+    legacy: bool,
 }
 
 impl From<SavedFormula> for Formula {
     fn from(f: SavedFormula) -> Formula {
         let expr = gridcraft_formula::parse(&f.text).ok().map(Arc::new);
-        Formula { text: f.text, expr, array: f.array, dynamic: f.dynamic }
+        Formula {
+            text: f.text,
+            source_text: f.source_text,
+            expr,
+            array: f.array,
+            dynamic: f.dynamic,
+            dynamic_array_range: f.dynamic_array_range,
+            legacy: f.legacy,
+        }
     }
 }
 
