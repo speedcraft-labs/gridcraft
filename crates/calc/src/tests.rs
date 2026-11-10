@@ -1756,6 +1756,32 @@ fn imported_legacy_sumproduct_keeps_nested_array_context() {
 }
 
 #[test]
+fn imported_legacy_lookup_keeps_array_expression_in_lookup_vector() {
+    let mut t = T::new();
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Monthly Summary")));
+    let summary = t.wb.sheet_mut(1).unwrap();
+    for (row, date, populated) in [(2, 10.0, true), (3, 20.0, false), (4, 30.0, true)] {
+        summary.set_value(c(&format!("A{row}")), Value::Number(date));
+        summary.set_value(c(&format!("C{row}")), if populated { Value::text("x") } else { Value::Empty });
+    }
+    let formula_text = "LOOKUP(2,1/('Monthly Summary'!$C$2:$C$4<>\"\"),'Monthly Summary'!$A$2:$A$4)";
+    // XLSX formulas without an array marker are evaluated using legacy implicit-intersection
+    // rules, while LOOKUP's vector arguments still accept array expressions.
+    for (at, text) in [("B58", format!("={formula_text}")), ("B59", format!("=IFERROR({formula_text},0)"))] {
+        let mut formula = Formula::new(&text);
+        formula.legacy = true;
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(formula));
+    }
+    t.calc.cells_changed(&mut t.wb, &[(0, c("B58")), (0, c("B59"))]);
+
+    assert_eq!((t.get("B58"), t.get("B59")), (Value::Number(30.0), Value::Number(30.0)));
+
+    t.wb.sheet_mut(1).unwrap().set_value(c("C4"), Value::Empty);
+    t.calc.cells_changed(&mut t.wb, &[(1, c("C4"))]);
+    assert_eq!((t.get("B58"), t.get("B59")), (Value::Number(10.0), Value::Number(10.0)));
+}
+
+#[test]
 fn imported_legacy_sum_keeps_reference_returning_ranges() {
     let mut t = T::new();
     t.set("A1", "1");

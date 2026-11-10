@@ -1356,12 +1356,15 @@ fn column_autocomplete_skips_ambiguous_prefixes_and_numbers() {
 #[test]
 fn column_autocomplete_folds_case_beyond_ascii() {
     let mut s = blank();
-    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"], ["STRAẞENBAHN"]]})).unwrap();
+    // The harness warms the sheet before the test can configure its context. Use
+    // a supported spelling for that first paint, then add the out-of-font glyph after enabling tofu.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"], ["STRASSENBAHN"]]})).unwrap();
     s.execute("selection.set", json!({"cell": "A5"})).unwrap();
     let mut h = harness(s);
     // The test includes capital sharp S, which is outside the minimal pinned
     // test fonts. The assertions below cover matching and caret placement.
     h.ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Tofu);
+    h.state_mut().session.execute("cell.set", json!({"cell": "A4", "input": "STRAẞENBAHN"})).unwrap();
     text(&mut h, "éba");
     assert_eq!(completion(&h), ("éba".into(), Some("ébano".into())), "Ébano and ébano are one entry, Ébène doesn't match");
     h.state_mut().cancel_edit();

@@ -827,11 +827,13 @@ fn legacy_intersection_scoped(expr: &Expr, array_context: bool, bound_names: &Ha
                                     || legacy_returns_array(result)
                         )
                         || matches!(a, Expr::Unary(UnOp::Spill, _));
-                    let nested_array_context =
-                        array_context || (name == "SUMPRODUCT" && consumes_range) || (consumes_range && returns_reference_or_array);
+                    let nested_array_context = array_context
+                        || (name == "SUMPRODUCT" && consumes_range)
+                        || (name == "LOOKUP" && consumes_range)
+                        || (consumes_range && returns_reference_or_array);
                     // Keep a range argument for the consuming function without making every
                     // nested expression an array formula. SUMPRODUCT evaluates expressions
-                    // element by element, so its array context continues through its arguments.
+                    // element by element, and LOOKUP's vector arguments need their array expressions.
                     if consumes_range && matches!(a, Expr::Ref(_)) {
                         a.clone()
                     } else {
