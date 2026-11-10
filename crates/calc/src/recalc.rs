@@ -704,6 +704,11 @@ impl Calc {
                 let mut updates = Vec::with_capacity(end - start);
                 for key in &dirty[start..end] {
                     if let Some(value) = results.remove(key) {
+                        if value == Value::Error(CellError::Spill) {
+                            self.spill_errors.insert(*key);
+                        } else {
+                            self.spill_errors.remove(key);
+                        }
                         updates.push((key.1, value));
                     }
                 }
