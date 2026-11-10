@@ -31,8 +31,7 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
         return (PI / s).ln() - ln_gamma(1.0 - x);
     }
     if x <= 64.0 && x == x.floor() {
-        // For small integer arguments, summing log(k) is more accurate than the Lanczos
-        // approximation and avoids rounding a factorial before taking its logarithm.
+        // Summing log(k) avoids rounding a factorial before taking its logarithm.
         let mut sum = 0.0;
         for i in 2..x as u32 {
             sum += f64::from(i).ln();
@@ -40,8 +39,7 @@ pub(crate) fn ln_gamma(x: f64) -> f64 {
         return sum;
     }
     if (0.5..=256.0).contains(&x) && (x - 0.5).fract() == 0.0 {
-        // Half-integer values recur from Γ(1/2)=√π. This avoids the few ulps of Lanczos error
-        // that can cross a decimal rounding boundary in inverse chi-square results.
+        // Half-integer recurrence keeps inverse chi-square results off rounding boundaries.
         let mut sum = 0.5 * PI.ln();
         for i in 0..(x - 0.5) as usize {
             sum += (i as f64 + 0.5).ln();
@@ -96,11 +94,17 @@ pub(crate) fn reg_gamma_p(a: f64, x: f64) -> f64 {
     if x.is_infinite() {
         return 1.0;
     }
-    if x < a + 1.0 { gamma_series(a, x) } else { 1.0 - gamma_cf(a, x) }
+    if x < a + 1.0 { gamma_series(a, x, front_of(a, x)) } else { 1.0 - gamma_cf(a, x, front_of(a, x)) }
 }
 
 /// Regularised upper incomplete gamma Q(a, x) = 1 − P(a, x).
 pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
+    let front = if a > 0.0 && x > 0.0 && x.is_finite() { (-x + a * x.ln() - ln_gamma(a)).exp() } else { 0.0 };
+    reg_gamma_q_front(a, x, front)
+}
+
+/// Q(a, x) given the prefactor `e^-x x^a / Γ(a)` (the Poisson mass at a - 1, times x).
+pub(crate) fn reg_gamma_q_front(a: f64, x: f64, front: f64) -> f64 {
     if a.is_nan() || a <= 0.0 || x.is_nan() || x < 0.0 || !a.is_finite() {
         return f64::NAN;
     }
@@ -111,9 +115,7 @@ pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
         return 0.0;
     }
     if a > 0.5 && a <= 256.0 && (a - 0.5).fract() == 0.0 {
-        // For half-integer shapes, recur upward from Q(1/2,x)=erfc(√x). This avoids the
-        // cancellation and accumulated error of a continued fraction at the common chi-square
-        // degrees of freedom used with CHISQ.INV.RT.
+        // Recur upward from Q(1/2,x)=erfc(sqrt(x)), avoiding cancellation in the continued fraction.
         let mut shape = 0.5;
         let mut q = reg_gamma_q(shape, x);
         while shape < a {
@@ -122,10 +124,15 @@ pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
         }
         return q.clamp(0.0, 1.0);
     }
-    if x < a + 1.0 { 1.0 - gamma_series(a, x) } else { gamma_cf(a, x) }
+    if x < a + 1.0 { 1.0 - gamma_series(a, x, front) } else { gamma_cf(a, x, front) }
 }
 
-fn gamma_series(a: f64, x: f64) -> f64 {
+/// `e^-x x^a / Γ(a)`.
+fn front_of(a: f64, x: f64) -> f64 {
+    (-x + a * x.ln() - ln_gamma(a)).exp()
+}
+
+fn gamma_series(a: f64, x: f64, front: f64) -> f64 {
     let mut ap = a;
     let mut sum = 1.0 / a;
     let mut del = sum;
@@ -137,10 +144,10 @@ fn gamma_series(a: f64, x: f64) -> f64 {
             break;
         }
     }
-    sum * (-x + a * x.ln() - ln_gamma(a)).exp()
+    sum * front
 }
 
-fn gamma_cf(a: f64, x: f64) -> f64 {
+fn gamma_cf(a: f64, x: f64, front: f64) -> f64 {
     let tiny = 1e-300;
     let mut b = x + 1.0 - a;
     let mut c = 1.0 / tiny;
@@ -164,7 +171,7 @@ fn gamma_cf(a: f64, x: f64) -> f64 {
             break;
         }
     }
-    (-x + a * x.ln() - ln_gamma(a)).exp() * h
+    front * h
 }
 
 /// Error function.
@@ -207,6 +214,17 @@ pub(crate) fn erfc(x: f64) -> f64 {
 
 /// Regularised incomplete beta I_x(a, b).
 pub(crate) fn reg_inc_beta(x: f64, a: f64, b: f64) -> f64 {
+    if x > 0.0 && x < 1.0 && a > 0.0 && b > 0.0 {
+        let ln_bt = -ln_beta(a, b) + a * x.ln() + b * (1.0 - x).ln();
+        return reg_inc_beta_front(x, a, b, ln_bt.exp());
+    }
+    reg_inc_beta_front(x, a, b, 0.0)
+}
+
+/// I_x(a, b) given the prefactor `bt = x^a (1-x)^b / B(a, b)` (symmetric in the two sides). A
+/// caller that knows `bt` more accurately than the log-gamma route gives (the binomial mass, for
+/// instance) passes it here.
+pub(crate) fn reg_inc_beta_front(x: f64, a: f64, b: f64, bt: f64) -> f64 {
     if a.is_nan() || a <= 0.0 || b.is_nan() || b <= 0.0 || !(0.0..=1.0).contains(&x) {
         return f64::NAN;
     }
@@ -216,8 +234,6 @@ pub(crate) fn reg_inc_beta(x: f64, a: f64, b: f64) -> f64 {
     if x == 1.0 {
         return 1.0;
     }
-    let ln_bt = -ln_beta(a, b) + a * x.ln() + b * (1.0 - x).ln();
-    let bt = ln_bt.exp();
     if x < (a + 1.0) / (a + b + 2.0) { bt * beta_cf(a, b, x) / a } else { 1.0 - bt * beta_cf(b, a, 1.0 - x) / b }
 }
 
