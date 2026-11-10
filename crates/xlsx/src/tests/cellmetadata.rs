@@ -87,7 +87,9 @@ fn dynamic_array_metadata_is_read_onto_formulas() {
     }
     assert!(!sh.cell(at("D6")).unwrap().formula.as_ref().unwrap().dynamic);
     assert!(sh.cell(at("D6")).unwrap().formula.as_ref().unwrap().legacy);
-    assert!(sh.cell(at("D7")).unwrap().formula.as_ref().unwrap().legacy);
+    let d7 = sh.cell(at("D7")).unwrap().formula.as_ref().unwrap();
+    assert!(d7.legacy);
+    assert_eq!(d7.source_text.as_deref(), Some("A:A&\"/\"&B:B"));
 }
 
 #[test]

@@ -145,7 +145,12 @@ pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>,
         let mut changed = Vec::new();
         for at in positions {
             let Some(formula) = sheet.cell(at).and_then(|c| c.formula.as_deref()) else { continue };
-            if let Some(f) = legacy(wb, si, at, formula, functions) {
+            if let Some(mut f) = legacy(wb, si, at, formula, functions) {
+                // Keep the import metadata when rewriting a legacy formula with explicit `@`
+                // operators. The evaluator uses `legacy` to retain Excel's intersection rules,
+                // while `source_text` keeps FORMULATEXT tied to the spelling in the file.
+                f.legacy = formula.legacy;
+                f.source_text = formula.source_text.clone();
                 changed.push((at, f));
             }
         }
