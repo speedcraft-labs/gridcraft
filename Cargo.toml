@@ -15,6 +15,7 @@ craft-text = { git = "https://github.com/speedcraft-labs/craft-libs", rev = "315
 # internal
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
+gridcraft-sandbox = { path = "crates/sandbox" }
 gridcraft-formula = { path = "crates/formula" }
 gridcraft-functions = { path = "crates/functions" }
 gridcraft-model = { path = "crates/model" }

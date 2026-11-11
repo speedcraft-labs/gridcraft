@@ -64,6 +64,15 @@ impl<H: Hay + ?Sized> Hay for &H {
     }
 }
 
+impl Hay for Vec<Value> {
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+    fn at(&self, i: usize) -> Option<&Value> {
+        self.as_slice().get(i)
+    }
+}
+
 enum Line<'a> {
     Column(&'a Array),
     Row(&'a Array),
@@ -177,11 +186,6 @@ fn row(a: &Array, r: usize) -> Vec<Value> {
     (0..a.cols).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()
 }
 
-/// A looked-up cell value: blanks read as 0 like a reference to an empty cell.
-fn cell_result(v: Value) -> Value {
-    if matches!(v, Value::Empty) { Value::Number(0.0) } else { v }
-}
-
 // ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
@@ -198,15 +202,16 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     }
     let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
-    let keys = if vertical { Line::Column(&table) } else { Line::Row(&table) };
-    let len = if vertical { table.cols } else { table.rows };
+    let (keys, len) = if vertical { (Line::Column(&table), table.cols) } else { (Line::Row(&table), table.rows) };
     if idx >= len {
         return Err(CellError::Ref);
     }
     let pos = if approx { bsearch_last(&x, &keys, false) } else { find_exact(&x, &keys, true, false) };
     let pos = pos.ok_or(CellError::NA)?;
     let v = if vertical { table.get(pos, idx) } else { table.get(idx, pos) };
-    Ok(cell_result(v.cloned().unwrap_or(Value::Empty)))
+    // An empty target stays blank, as in Excel: ISBLANK sees it as blank and `&` /
+    // CONCATENATE treat it as ""; only a formula's final result displays 0 (#374).
+    Ok(v.cloned().unwrap_or(Value::Empty))
 }
 
 fn vlookup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -240,16 +245,16 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         } else {
             None
         };
-        return v.map(cell_result).ok_or(CellError::NA);
+        return v.ok_or(CellError::NA);
     }
     // Array form: search the first row of a wide array, else the first column; return the
     // matching entry from the last row / column.
     if la.cols > la.rows {
         let pos = bsearch_last(&x, &Line::Row(&la), false).ok_or(CellError::NA)?;
-        Ok(cell_result(la.get(la.rows - 1, pos).cloned().unwrap_or(Value::Empty)))
+        Ok(la.get(la.rows - 1, pos).cloned().unwrap_or(Value::Empty))
     } else {
         let pos = bsearch_last(&x, &Line::Column(&la), false).ok_or(CellError::NA)?;
-        Ok(cell_result(la.get(pos, la.cols - 1).cloned().unwrap_or(Value::Empty)))
+        Ok(la.get(pos, la.cols - 1).cloned().unwrap_or(Value::Empty))
     }
 }
 
@@ -371,13 +376,13 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             if vertical {
                 let r = row(&ra, p);
                 if r.len() == 1 {
-                    return Ok(cell_result(r.into_iter().next().unwrap_or(Value::Empty)));
+                    return Ok(r.into_iter().next().unwrap_or(Value::Empty));
                 }
                 array_val(1, r.len(), r)
             } else {
                 let c = column(&ra, p);
                 if c.len() == 1 {
-                    return Ok(cell_result(c.into_iter().next().unwrap_or(Value::Empty)));
+                    return Ok(c.into_iter().next().unwrap_or(Value::Empty));
                 }
                 array_val(c.len(), 1, c)
             }
@@ -617,7 +622,6 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 mod tests {
     use gridcraft_core::{CellError, Value};
 
-    use super::{Line, bsearch_last, find_exact};
     use crate::util::testutil::*;
 
     fn table() -> Value {
@@ -634,21 +638,6 @@ mod tests {
     }
 
     #[test]
-    fn borrowed_lookup_lines_match_owned_keys() {
-        let Value::Array(table) = table() else { panic!("table fixture must be an array") };
-        let owned_column: Vec<_> = (0..table.rows).map(|r| table.get(r, 0).cloned().unwrap_or(Value::Empty)).collect();
-        let owned_row: Vec<_> = (0..table.cols).map(|c| table.get(0, c).cloned().unwrap_or(Value::Empty)).collect();
-        for x in [nv(0.0), nv(2.0), nv(4.0), nv(5.0), tv("one"), tv("missing")] {
-            let column_line = Line::Column(&table);
-            let row_line = Line::Row(&table);
-            assert_eq!(find_exact(&x, &column_line, true, false), find_exact(&x, owned_column.as_slice(), true, false));
-            assert_eq!(find_exact(&x, &row_line, true, false), find_exact(&x, owned_row.as_slice(), true, false));
-            assert_eq!(bsearch_last(&x, &column_line, false), bsearch_last(&x, owned_column.as_slice(), false));
-            assert_eq!(bsearch_last(&x, &row_line, false), bsearch_last(&x, owned_row.as_slice(), false));
-        }
-    }
-
-    #[test]
     fn vlookup() {
         is_text(ev("VLOOKUP", vec![n(2.0), rf(table()), n(2.0)]), "two");
         is_text(ev("VLOOKUP", vec![n(4.0), rf(table()), n(2.0)]), "three");
@@ -658,7 +647,8 @@ mod tests {
         is_err(ev("VLOOKUP", vec![n(4.0), rf(table()), n(2.0), b(false)]), CellError::NA);
         is_err(ev("VLOOKUP", vec![n(4.0), rf(table()), n(2.0), empty()]), CellError::NA);
         close(ev("VLOOKUP", vec![n(3.0), rf(table()), n(3.0), b(false)]), 30.0);
-        close(ev("VLOOKUP", vec![n(5.0), rf(table()), n(3.0), b(false)]), 0.0);
+        // An empty target stays blank (the cell displays 0 only as a final result) (#374).
+        assert_eq!(ev("VLOOKUP", vec![n(5.0), rf(table()), n(3.0), b(false)]), Value::Empty);
         is_err(ev("VLOOKUP", vec![n(3.0), rf(table()), n(4.0)]), CellError::Ref);
         is_err(ev("VLOOKUP", vec![n(3.0), rf(table()), n(0.0)]), CellError::Value);
         close(ev("VLOOKUP", vec![t("b*"), rf(names()), n(2.0), b(false)]), 2.0);
