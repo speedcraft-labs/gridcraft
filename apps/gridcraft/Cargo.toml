@@ -51,6 +51,7 @@ arboard = { workspace = true, features = ["image-data", "wayland-data-control"] 
 pollster = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+winit = { version = "0.30.13", default-features = false }
 muda = { version = "0.21", default-features = false }
 # Finder double-click, Open With, Dock drops and `open -a GridCraft file.xlsx` arrive as a
 # kAEOpenDocuments Apple event, which winit 0.30 doesn't handle (#69). This audited crate (also used

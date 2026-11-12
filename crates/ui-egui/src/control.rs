@@ -471,6 +471,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Null)
         }
         "ui.focus" => {
+            // Explicit request: activate the app and take keyboard focus.
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
@@ -514,6 +515,10 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
         if !req.take() {
             continue;
         }
+        // UI requests need a rendered pass, but must not activate the app for an agent.
+        if req.method.starts_with("ui.") && req.method != "ui.focus" {
+            app.raise_for_control(ctx);
+        }
         let outcome = handle(app, ctx, &req.method, &req.params);
         match outcome {
             Outcome::Done(v) => {
@@ -524,6 +529,16 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
     }
     app.control_rx = Some(rx);
     if !app.synthetic.is_empty() {
+        ctx.request_repaint();
+    }
+}
+
+impl SheetApp {
+    /// Make the UI pass run for a control request without stealing the user's keyboard focus.
+    pub(crate) fn raise_for_control(&mut self, ctx: &egui::Context) {
+        if let Some(raise) = self.raise_without_focus {
+            raise();
+        }
         ctx.request_repaint();
     }
 }
