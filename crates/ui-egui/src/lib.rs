@@ -249,6 +249,8 @@ pub struct SheetApp {
     /// without reaching input handling, so the hook must offer the same step again.
     pub(crate) synthetic_injected_at_pass: Option<u64>,
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// The native host's nonactivating window raise for control-channel UI requests.
+    pub raise_without_focus: Option<fn() -> bool>,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,

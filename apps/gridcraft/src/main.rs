@@ -18,6 +18,7 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod print;
+mod window_raise;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -353,7 +354,11 @@ fn main() -> eframe::Result<()> {
         viewport = viewport.with_icon(i);
     }
     let window_builder = viewport.clone();
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport: viewport.with_active(control_port.is_none()),
+        event_loop_builder: agent_event_loop(control_port.is_some()),
+        ..Default::default()
+    };
     #[cfg(unix)]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
@@ -398,6 +403,7 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
+                app.raise_without_focus = Some(window_raise::raise_without_focus);
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
@@ -432,6 +438,20 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+/// Driven by an agent (`--control`): don't activate the app on launch, so the user's keyboard
+/// focus stays where it is (macOS; winit activates ignoring other apps by default).
+fn agent_event_loop(agent: bool) -> Option<eframe::EventLoopBuilderHook> {
+    #[cfg(target_os = "macos")]
+    if agent {
+        return Some(Box::new(|b| {
+            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            b.with_activate_ignoring_other_apps(false);
+        }));
+    }
+    let _ = agent;
+    None
 }
 
 #[cfg(test)]
