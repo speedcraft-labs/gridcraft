@@ -211,7 +211,6 @@ impl Calc {
             }
         }
         self.graph.settle();
-        self.graph.rebuild_order();
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
     }
 
