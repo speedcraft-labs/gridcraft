@@ -664,6 +664,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
+fn source_has_dummyfunction(source: &str) -> bool {
+    const NEEDLE: &[u8] = b"DUMMYFUNCTION";
+    source
+        .as_bytes()
+        .windows(NEEDLE.len())
+        .any(|window| window.iter().zip(NEEDLE.iter()).all(|(actual, expected)| actual.eq_ignore_ascii_case(expected)))
+}
+
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {
     // Keep the file's dynamic-array mark (and treat Google Sheets unwrapped formulas as dynamic),
     // so saving never turns the formula into a legacy one.
@@ -674,7 +682,7 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
     let source = f.text.trim();
     // A Google Sheets wrapper is removed from the model because GridCraft can evaluate its
     // inner formula. Keep the original spelling only when it still describes that formula.
-    if !source.is_empty() && !source.to_ascii_uppercase().contains("DUMMYFUNCTION") {
+    if !source.is_empty() && !source_has_dummyfunction(source) {
         fm.source_text = Some(source.to_string());
     }
     Some(Formula { dynamic, legacy, ..fm })
