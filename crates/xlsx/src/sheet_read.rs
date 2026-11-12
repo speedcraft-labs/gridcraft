@@ -681,8 +681,9 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
     let legacy = !dynamic && f.attr("t") != Some("array");
     let source = f.text.trim();
     // A Google Sheets wrapper is removed from the model because GridCraft can evaluate its
-    // inner formula. Keep the original spelling only when it still describes that formula.
-    if !source.is_empty() && !source_has_dummyfunction(source) {
+    // inner formula. Keep source spelling only when it differs from the canonical formula; if
+    // they match, the formula already carries the same text for FORMULATEXT and writing.
+    if !source.is_empty() && source != fm.text && !source_has_dummyfunction(source) {
         fm.source_text = Some(source.to_string());
     }
     Some(Formula { dynamic, legacy, ..fm })
