@@ -188,6 +188,10 @@ impl Calc {
 
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        self.rebuild_with_order(wb, true);
+    }
+
+    fn rebuild_with_order(&mut self, wb: &Workbook, build_order: bool) {
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
@@ -211,7 +215,9 @@ impl Calc {
             }
         }
         self.graph.settle();
-        self.graph.rebuild_order();
+        if build_order {
+            self.graph.rebuild_order();
+        }
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
     }
 
@@ -273,7 +279,7 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
-        self.recalc_all_inner(wb, false);
+        self.recalc_all_inner(wb, false, true);
     }
 
     /// Recalculates a workbook as it is first loaded, retaining cached results for formulas that
@@ -281,14 +287,16 @@ impl Calc {
     /// A workbook in manual mode keeps every saved formula value until the user explicitly recalculates.
     pub fn recalc_all_from_file(&mut self, wb: &mut Workbook) {
         if wb.calc.mode == CalcMode::Manual {
-            self.rebuild(wb);
+            self.rebuild_with_order(wb, false);
             return;
         }
-        self.recalc_all_inner(wb, true);
+        // Imported files keep their cached values; defer the topological order until an edit
+        // needs it, so opening or saving a workbook does not pay the edit-time cache cost.
+        self.recalc_all_inner(wb, true, false);
     }
 
-    fn recalc_all_inner(&mut self, wb: &mut Workbook, preserve_imported_formula_cache: bool) {
-        self.rebuild(wb);
+    fn recalc_all_inner(&mut self, wb: &mut Workbook, preserve_imported_formula_cache: bool, build_order: bool) {
+        self.rebuild_with_order(wb, build_order);
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -362,7 +370,7 @@ impl Calc {
             }
         }
         self.graph.settle();
-        if graph_changed {
+        if graph_changed || self.graph.order_len() != self.graph.len() {
             self.graph.rebuild_order();
         }
         if wb.calc.mode == CalcMode::Manual {
