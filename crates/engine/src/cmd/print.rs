@@ -13,7 +13,7 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
 use gridcraft_model::{Alignment, FormControl, Image, SheetViewMode};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Color, ControlKind, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet,
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet,
     Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
 };
 use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};

@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/gridcraft"
 
 [workspace.dependencies]
+# Fork-only text matching and PDF metafile compatibility remain in use in fork-side crates.
+craft-text = { git = "https://github.com/speedcraft-labs/craft-libs", rev = "315f3bd6d8fc68a194772e30e60909b83d73bc7b", default-features = false, features = ["matching"] }
 # internal
 gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
@@ -26,6 +28,7 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
+craft-metafile = { git = "https://github.com/speedcraft-labs/craft-libs", rev = "b0822a8689eba9581ed1e5186ab93200dab81c70" }
 # Every craft-libs crate (craft-update, craft-window and the file-format crates here, craft-ui in
 # ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
 # craft-libs revision.
