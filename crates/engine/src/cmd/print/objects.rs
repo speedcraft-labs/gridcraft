@@ -1,6 +1,7 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, ControlKind, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use gridcraft_model::ControlKind;
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -86,21 +87,16 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             continue;
         }
         let (x, y, w, h) = place(r);
-        if craft_metafile::is_metafile(&im.data) {
-            if !pg.metafile(&im.data, Rect::new(x, y, w, h)) {
-                draw_object_placeholder(pg, (x, y, w, h), "Picture preview unavailable", b.k);
-            }
-            continue;
-        }
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        let decoded = pics.decoded.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
-        } else {
-            // Keep unsupported metafile formats visible in print. The original media part is
-            // still preserved in the workbook; this box makes the missing preview explicit.
-            draw_object_placeholder(pg, (x, y, w, h), "Picture preview unavailable", b.k);
+            // Every page the picture touches embeds its own copy: past the budget it is left out.
+            let bytes = px.len();
+            if pics.image_bytes.saturating_add(bytes) <= super::MAX_EMBEDDED_IMAGE_BYTES {
+                pics.image_bytes += bytes;
+                pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            }
         }
     }
     for shp in &sh.shapes {
@@ -130,31 +126,33 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
-    for ch in &sh.charts {
+    for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
+            let data = gridcraft_chart::resolve(wb, si, ch);
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+        });
+        if let Some(prims) = prims {
+            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+        }
     }
-    for control in sh.controls.iter().filter(|c| c.print) {
+    for control in sh.controls.iter().filter(|control| control.print) {
         let r = anchor_rect(sh, &control.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, w, h) = place(r);
-        draw_control_placeholder(pg, control.kind, &control.text, control.display_name().as_str(), (x, y, w, h), b.k);
+        draw_control_placeholder(pg, control.kind, &control.text, &control.display_name(), (x, y, w, h), b.k);
     }
-    // Some Excel controls and OLE objects are preserved as opaque OOXML and therefore have no
-    // modelled anchor. Keep their presence visible in the exported document instead of silently
-    // printing a blank sheet. Their original package parts remain untouched on save.
     let preserved_label = if let Some(preserved) = &sh.preserved {
-        let controls = preserved.elements.iter().filter(|e| e.slot == "controls").count();
-        let ole = preserved.elements.iter().filter(|e| e.slot == "oleObjects").count();
-        let start = super::print_range(sh).map(|r| r.start);
+        let controls = preserved.elements.iter().filter(|element| element.slot == "controls").count();
+        let ole = preserved.elements.iter().filter(|element| element.slot == "oleObjects").count();
+        let start = super::print_range(sh).map(|range| range.start);
         if (controls > 0 || ole > 0) && start.is_some_and(|cell| block.contains(cell)) {
             Some(match (controls > 0, ole > 0) {
                 (true, true) => "Embedded controls and OLE preview unavailable",
@@ -170,8 +168,6 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     };
     pg.restore();
     if let Some(label) = preserved_label {
-        // These preserved items have no modelled anchor. Put the fallback in the page margin so
-        // it never covers worksheet values or fills.
         draw_object_placeholder(pg, (bx, by + bh + 2.0, bw, 14.0), label, 1.0);
     }
 }
