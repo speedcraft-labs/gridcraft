@@ -1,5 +1,5 @@
-use serde_json::json;
 use gridcraft_model::ControlKind;
+use serde_json::json;
 
 use super::*;
 
