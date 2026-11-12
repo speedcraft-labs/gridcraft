@@ -142,15 +142,15 @@ fn single_cell_formula_spill(wb: &Workbook, sheet: usize, anchor: CellRef, value
 impl<'a> PassHost<'a> {
     pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
         let mut declared: HashMap<usize, Vec<(CellRef, RangeRef)>> = HashMap::default();
-        for (sheet, sh) in wb.sheets.iter().enumerate() {
-            for (anchor, cell) in sh.cells.iter() {
-                if let Some(formula) = cell.formula.as_ref()
-                    && formula.dynamic
-                    && let Some(range) = formula.dynamic_array_range
-                    && range.start == anchor
-                {
-                    declared.entry(sheet).or_default().push((anchor, range));
-                }
+        // Only dirty formulas can be pending in this pass. A non-dirty spill already has its
+        // values laid out in the workbook, so it needs no declared-range lookup here.
+        for &(sheet, anchor) in exprs.keys() {
+            if let Some(formula) = wb.sheet(sheet).and_then(|sh| sh.cells.get(anchor)).and_then(|cell| cell.formula.as_ref())
+                && formula.dynamic
+                && let Some(range) = formula.dynamic_array_range
+                && range.start == anchor
+            {
+                declared.entry(sheet).or_default().push((anchor, range));
             }
         }
         let declared_spills = declared.into_iter().map(|(sheet, ranges)| (sheet, DeclaredSpillRanges::new(ranges))).collect();
