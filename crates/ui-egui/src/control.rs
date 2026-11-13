@@ -472,6 +472,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         }
         "ui.focus" => {
             // Explicit request: activate the app and take keyboard focus.
+            #[cfg(target_os = "macos")]
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ok(Json::Null)
         }
@@ -536,6 +538,8 @@ pub fn poll(app: &mut SheetApp, ctx: &egui::Context) {
 impl SheetApp {
     /// Make the UI pass run for a control request without stealing the user's keyboard focus.
     pub(crate) fn raise_for_control(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "macos")]
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::viewport::WindowLevel::Normal));
         if let Some(raise) = self.raise_without_focus {
             raise();
         }

@@ -359,6 +359,15 @@ fn main() -> eframe::Result<()> {
         event_loop_builder: agent_event_loop(control_port.is_some()),
         ..Default::default()
     };
+    // Keep an agent window behind normal application windows, even when eframe first shows it.
+    #[cfg(target_os = "macos")]
+    let options = if control_port.is_some() {
+        let mut options = options;
+        options.viewport = options.viewport.with_window_level(egui::viewport::WindowLevel::AlwaysOnBottom);
+        options
+    } else {
+        options
+    };
     #[cfg(unix)]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
