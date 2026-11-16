@@ -1,7 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
-use gridcraft_model::ControlKind;
+use super::{Anchor, Font, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -77,9 +76,11 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
+    let place = |r: (f64, f64, f64, f64)| {
+        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+    };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
@@ -141,64 +142,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
         }
     }
-    for control in sh.controls.iter().filter(|control| control.print) {
-        let r = anchor_rect(sh, &control.anchor);
-        if !visible(r) {
-            continue;
-        }
-        let (x, y, w, h) = place(r);
-        draw_control_placeholder(pg, control.kind, &control.text, &control.display_name(), (x, y, w, h), b.k);
-    }
-    let preserved_label = if let Some(preserved) = &sh.preserved {
-        let controls = preserved.elements.iter().filter(|element| element.slot == "controls").count();
-        let ole = preserved.elements.iter().filter(|element| element.slot == "oleObjects").count();
-        let start = super::print_range(sh).map(|range| range.start);
-        if (controls > 0 || ole > 0) && start.is_some_and(|cell| block.contains(cell)) {
-            Some(match (controls > 0, ole > 0) {
-                (true, true) => "Embedded controls and OLE preview unavailable",
-                (true, false) => "Embedded control preview unavailable",
-                (false, true) => "Embedded OLE preview unavailable",
-                (false, false) => "",
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
     pg.restore();
-    if let Some(label) = preserved_label {
-        draw_object_placeholder(pg, (bx, by + bh + 2.0, bw, 14.0), label, 1.0);
-    }
-}
-
-fn draw_control_placeholder(pg: &mut Page, kind: ControlKind, text: &str, name: &str, (x, y, w, h): (f32, f32, f32, f32), k: f32) {
-    if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-    match kind {
-        ControlKind::Button => {
-            pg.fill_rect(x, y, w, h, [0xF2, 0xF2, 0xF2]);
-            pg.rect_stroke(x, y, w, h, 0.75 * k, [0x70, 0x70, 0x70]);
-            let caption = if text.trim().is_empty() { name } else { text };
-            pg.text(x + 4.0 * k, y + (h / 2.0) + 3.0 * k, (9.0 * k).max(6.0), Font::Helvetica, [0x20, 0x20, 0x20], caption);
-        }
-        ControlKind::Slider | ControlKind::Spin => {
-            pg.fill_rect(x, y, w, h, [0xE6, 0xE6, 0xE6]);
-            pg.rect_stroke(x, y, w, h, 0.75 * k, [0x70, 0x70, 0x70]);
-            let caption = format!("{}: {}", name, text.trim());
-            pg.text(x + 3.0 * k, y + (h / 2.0) + 3.0 * k, (8.0 * k).max(6.0), Font::Helvetica, [0x20, 0x20, 0x20], &caption);
-        }
-    }
-}
-
-fn draw_object_placeholder(pg: &mut Page, (x, y, w, h): (f32, f32, f32, f32), label: &str, k: f32) {
-    if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-    pg.fill_rect(x, y, w, h, [0xF2, 0xF2, 0xF2]);
-    pg.rect_stroke(x, y, w, h, 0.75 * k, [0x90, 0x90, 0x90]);
-    pg.text(x + 4.0 * k, y + (h / 2.0) + 3.0 * k, (8.0 * k).max(6.0), Font::Helvetica, [0x50, 0x50, 0x50], label);
 }
 
 fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {
@@ -211,9 +155,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
             v => vec![v.as_f64()],
         };
         let color = rgb_of(sp.color, wb).unwrap_or([0x15, 0x60, 0x82]);
-        let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
+        let (x, y, w, h) = b.drawn_rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
-        let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        let mut prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        if sh.right_to_left {
+            for prim in &mut prims {
+                match prim {
+                    gridcraft_chart::Prim::Rect { x, w, .. } => *x = wpx - *x - *w,
+                    gridcraft_chart::Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| p[0] = wpx - p[0]),
+                    gridcraft_chart::Prim::Circle { cx, .. } => *cx = wpx - *cx,
+                    _ => {}
+                }
+            }
+        }
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
 }
@@ -257,7 +211,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), TextDirection::Auto);
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -265,13 +219,28 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lw = gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction);
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
             ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
         };
-        pg.text(lx, yy, size, font, color, l);
+        // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
+        if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
+            let off = (size * 0.06).max(0.5);
+            pg.text_with_direction(Point::new(lx + off, yy + off), size, font, sc, &l.text, l.direction);
+        }
+        // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
+        // directions by half the outline width, under the filled text.
+        if let Some((c, ow)) = fm.text_outline
+            && let Some(oc) = rgb_of(c, wb)
+        {
+            let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                pg.text_with_direction(Point::new(lx + dx * d, yy + dy * d), size, font, oc, &l.text, l.direction);
+            }
+        }
+        pg.text_with_direction(Point::new(lx, yy), size, font, color, &l.text, l.direction);
         yy += size * 1.2;
     }
 }
