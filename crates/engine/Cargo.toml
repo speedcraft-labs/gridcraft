@@ -22,12 +22,17 @@ thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 craft-csv = { workspace = true }
+craft-gridcraft-format = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 craft-metafile = { workspace = true }
 image = { workspace = true }
+<<<<<<< HEAD
 sha2 = { workspace = true }
+=======
+unicode-segmentation = "=1.13.3"
+>>>>>>> 19f07f3a25939a70c53471641890b11b82abf3d0
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
