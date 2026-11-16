@@ -297,7 +297,7 @@ impl Parser {
                 let mut args = self.args()?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
                 if name == "ANCHORARRAY"
-                    && let [Expr::Ref(Reference { kind: RefKind::Cell(_), .. })] = args.as_slice()
+                    && args.len() == 1
                     && let Some(r) = args.pop()
                 {
                     return Ok(Expr::Unary(UnOp::Spill, Box::new(r)));
