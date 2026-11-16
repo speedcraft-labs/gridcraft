@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-11-08 · **Last updated:** 2026-11-08 · **Change:** minor (`RTD` is recognized and returns `#N/A` without a local real-time data server; earlier: `GETPIVOTDATA` reads the supported static PivotTable layout; `TEXT(value,"")` preserves nonnumeric text; imported CUBE formulas retain their cached result when their external OLAP connection is unavailable; GROUPBY total depth 2 or more adds subtotals; Python cells are edited in the formula bar; the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -23,16 +23,13 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
-  cube connections), RTD (`#N/A` without a real-time data server), and WEBSERVICE and FILTERXML
-  (`#VALUE!`). On file load, imported CUBE
-  formulas keep the result their source application cached; editing the formula or a precedent
-  recalculates it normally (and returns `#N/A` without an OLAP connection). Excel for Mac also lacks
+  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
   WEBSERVICE and FILTERXML; Excel for Windows has them.
 - The measurement is **presence**. Depth (edge cases matching Excel) is estimated below.
 
 ## Coverage
 
-**Measured: 515 / 523 by name (98.5%); 505 / 523 working (96.6%).**
+**Measured: 513 / 523 by name (98.1%); 504 / 523 working (96.4%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
@@ -41,7 +38,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
-| Lookup and reference | 39 | 37 | 37 | 95% | IMAGE, TRIMRANGE |
+| Lookup and reference | 40 | 36 | 36 | 90% | GETPIVOTDATA, IMAGE, RTD, TRIMRANGE |
 | Compatibility | 40 | 40 | 40 | 100% | — |
 | Date and time | 25 | 25 | 25 | 100% | — |
 | Information | 22 | 21 | 21 | 95% | STOCKHISTORY |
@@ -49,9 +46,9 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Database | 12 | 12 | 12 | 100% | — |
 | Cube | 7 | 7 | 0 | 0% | (all 7 are `#N/A` stubs) |
 | Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
-| Add-in and Automation | 4 | 2 | 1 | 25% | CALL, REGISTER.ID |
+| Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **507** | **497** | **95.0%** | 16 missing, 10 stubs |
+| **Total** | **523** | **505** | **496** | **94.8%** | 18 missing, 9 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 346 / 360, 2010
 56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
@@ -69,34 +66,25 @@ This improves series preparation; it does not change the model-fitting or season
 |---|---|---|---|
 | FORECAST.ETS family (4) | yes | 4–6 h | AAA exponential smoothing with seasonality detection; needed for Forecast Sheet too |
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
-| GETPIVOTDATA | partial | — | Static PivotTables with one row field and one value field are supported; multiple fields, columns, and report filters remain. The "Generate GetPivotData" option is separate |
+| GETPIVOTDATA | yes | 2–3 h | Needs the pivot engine's result cache; also the "Generate GetPivotData" option |
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
 | CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
-| RTD | partial | — | Recognized; without a local COM real-time data server it returns `#N/A`. Server integration remains out of scope |
-| CALL, REGISTER.ID | no | — | Native DLL/COM calls; not portable or safe |
+| CALL, REGISTER.ID, RTD | no | — | Native DLL/COM calls; not portable or safe |
 
 ## Formula language
 
 | Feature | Status |
 |---|---|
 | A1 and R1C1 references, absolute/relative/mixed, F4 cycling | done |
-| Omitted-sheet references in defined names (`!A1`) | resolve to the caller's current sheet |
 | 3-D references (`Sheet1:Sheet3!A1`) | done; deleting a span's end sheet keeps the rest (#140) |
 | Structured references (`Table1[Col]`, `[#Totals]`, `@`; the unbracketed `[[#This Row],Col]` some writers emit) | done |
-| Imported parenthesized numeric terms written with a decimal comma | normalized to canonical decimal points without changing argument separators or quoted text |
 | Defined names (workbook and sheet scope), Create from Selection | done |
-| XLSX loaded in manual calculation mode | keeps saved formula values until an explicit recalculation |
-| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157); imported `ANCHORARRAY((A1))` keeps its parenthesized spill operator parseable, and direct references to declared spill cells read their recalculated or laid-out values |
-| Imported `_xlfn.` formulas with a cached `#NAME?` | keep the saved error during initial file load; explicit recalculation evaluates the implemented function |
-| Imported legacy `FREQUENCY` formulas with full-column inputs or fixed-array metadata | preserve a saved nonempty error on load; explicit recalculation runs the evaluator |
-| `ROW(A)` / `COLUMN(A)` single-column-name shorthand | resolve the column name as its first-cell reference |
-| Cached `#NAME?` for `MAXIFS` / `MINIFS` saved by Excel versions without those functions | preserve the saved error on load; explicit recalculation evaluates the function |
-| Cached error results for legacy `MODE` formulas | preserve the saved error on load; explicit recalculation uses current evaluator behavior |
+| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
 | SUBTOTAL / AGGREGATE input size | references trim to the used range; all areas, arrays and values of one call are charged against the 16-million-cell limit before any cell is read (skipped hidden, nested and error cells count), and `#NUM!` past it (#2175) |
 | Implicit intersection `@`, legacy CSE array formulas | done; formulas saved without dynamic-array metadata open with Excel's implicit `@` inserted where a range meets a single-value parameter, operator or cell result, and calculate like Excel's cached values (cells differing from Excel's cached values: POI's FormulaEvalTestData_Copy 197 → 3, StructuredReferences 2 → 0). T reads a reference's top-left cell |
-| Implicit intersection `@`, legacy CSE array formulas | imported legacy scalar formulas intersect references, spill results and defined names that resolve to arrays or ranges; functions consuming those names still receive the full array; legacy array range fill (PR #156); `IFERROR`/`IFNA` array fallbacks use the matching element |
+| Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156) |
 | Implicit intersection `@`, legacy CSE array formulas | done, the entered range filled (PR #156) |
 | Array lifting: an array in a scalar argument evaluates the function per element | done. The Analysis ToolPak functions (EOMONTH, EDATE, WORKDAY(.INTL), NETWORKDAYS(.INTL), YEARFRAC, WEEKNUM, the COUP*, PRICE*, YIELD*, ODD*, TBILL*, ACCRINT*, AMOR*, DISC, DURATION, CUMIPMT/CUMPRINC, EFFECT, NOMINAL, DOLLARDE/FR, XNPV/XIRR rate and guess, FVSCHEDULE principal, ISEVEN/ISODD, QUOTIENT, MROUND, FACTDOUBLE, SQRTPI, RANDBETWEEN, SERIESSUM, the base conversions, CONVERT, DELTA, GESTEP, ERF/ERFC, BESSEL*, COMPLEX and IM* except IMSUM/IMPRODUCT) give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does in both dynamic-array and legacy formulas; array constants and computed arrays (`A1:A3+0`) still lift, and range arguments (holidays, schedule, cash flows) and the .INTL weekend accept ranges. Difference: BYROW/BYCOL pass their row or column to the LAMBDA as values, so `BYROW(A1:B3,LAMBDA(r,EOMONTH(r,0)))` lifts where Excel gives `#VALUE!` |
 | YEARFRAC basis 0, February-end start to day 31 | done: Excel 16.0 returns 31/360 for `YEARFRAC(2021-02-28,2021-03-31,0)` (0.08611111111111111); regression also covers leap day and reversed dates |
@@ -135,9 +123,6 @@ fraction sections with literal text (`#\:#=/=#`, `#_#/#`), zero fractions, zero-
 denominators, `?` placeholders padding the thousands separator, and booleans through the text
 section (`TEXT(TRUE,";;;\@@\@")` = `@TRUE@`).
 
-An empty format string returns nonnumeric text unchanged (`TEXT("L0001","")` = `L0001`);
-numeric values with an empty format still return the empty string.
-
 `MEDIAN` and `AGGREGATE` function number 12 use an overflow-safe midpoint for even-sized
 inputs, so large finite middle values do not become `#NUM!` merely because their sum overflows (#1579).
 Sorting, argument coercion and error propagation are unchanged; this is a numerical correction
@@ -147,14 +132,16 @@ Work to close (16–26 h in total): the in-scope missing functions (10–16 h wi
 an oracle corpus of Excel-computed results per function (owner runs Excel on generated
 workbooks; results checked in as data, not Excel files) and fixing what it finds (6–10 h).
 
+GCD and LCM validate the sign of the original argument before truncating it. Negative
+fractions such as `-0.5` return `#NUM!`, including inside ranges and beside a zero argument.
+Positive fractional inputs still truncate, and signed zero remains valid. Covered by
+`gcd_and_lcm_reject_negative_fractions_before_truncation`; function counts and estimates are unchanged.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | minor | `IFERROR`/`IFNA` array fallbacks now use the matching fallback-array element instead of repeating the top-left value |
-| 2026-11-08 | minor | `TEXT(value,"")` keeps nonnumeric text unchanged while numeric values still produce an empty string |
-| 2026-11-08 | minor | `GETPIVOTDATA` reads static reports for one row field and one value field, including grand totals; unsupported pivot layouts return `#REF!` |
-| 2026-11-07 | minor | Imported legacy scalar formulas now implicitly intersect defined names that resolve to arrays or ranges, while array-consuming functions keep the full name result |
+| 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
