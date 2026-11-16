@@ -1,4 +1,4 @@
-use gridcraft_model::{Sparkline, SparklineKind};
+use gridcraft_model::{ControlKind, FormControl, Sparkline, SparklineKind};
 use serde_json::json;
 
 use super::*;
@@ -720,6 +720,39 @@ fn rich_sheet_renders() {
     assert!(pages >= 1);
     assert!(contains(&pdf, "(Merged) Tj"));
     assert!(contains(&pdf, "(A long piece of text that overflows into neighbours) Tj"));
+}
+
+#[test]
+fn form_controls_are_printed_as_placeholders_and_ole_presence_is_visible() {
+    let mut s = s();
+    let doc = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut doc.wb);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.controls.push(FormControl {
+        id: 1,
+        kind: ControlKind::Button,
+        text: "Run report".into(),
+        anchor: Anchor { cell: CellRef::new(3, 2), width: 90.0, height: 24.0, ..Default::default() },
+        ..Default::default()
+    });
+    sh.controls.push(FormControl {
+        id: 2,
+        kind: ControlKind::Button,
+        text: "Do not print".into(),
+        anchor: Anchor { cell: CellRef::new(5, 2), width: 90.0, height: 24.0, ..Default::default() },
+        print: false,
+        ..Default::default()
+    });
+    sh.preserved = Some(std::sync::Arc::new(gridcraft_model::Preserved {
+        elements: vec![gridcraft_model::PreservedXml { slot: "oleObjects".into(), xml: "<oleObjects/>".into() }],
+        ..Default::default()
+    }));
+
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "(Run report) Tj"), "the printable form control should have a PDF placeholder");
+    assert!(!contains(&pdf, "(Do not print) Tj"), "a control marked not to print must stay hidden");
+    assert!(contains(&pdf, "Embedded OLE preview unavailable"), "preserved OLE content should not disappear silently");
 }
 
 #[test]

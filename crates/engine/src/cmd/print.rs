@@ -11,7 +11,7 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
-use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{Alignment, FormControl, Image, SheetViewMode};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
     Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
